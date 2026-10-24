@@ -36,11 +36,81 @@
   --water: #b8cdd3;
   --water-edge: #7f9ea8;
 
+  --overlay: rgb(29 28 26 / 0.25);
+  --shadow: 0 24px 60px -20px rgb(29 28 26 / 0.35);
+  color-scheme: light;
+
   --radius-sm: 4px;
   --radius: 6px;
   --radius-lg: 10px;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Dark theme: follows the system unless the user picked a theme (data-theme on <html>). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #121311;
+    --surface: #1a1b19;
+    --sunken: #242522;
+    --ink: #ecebe6;
+    --ink-2: #bdbab1;
+    --ink-3: #9a978d;
+    --ink-4: #5c5b55;
+    --line: #2b2c29;
+    --line-strong: #3b3c38;
+    --sage: #97ab86;
+    --sage-deep: #b9cba8;
+    --sage-soft: #2e3829;
+    --sage-wash: #1c2219;
+    --clay: #d9846a;
+    --clay-soft: #3a2620;
+    --overlay: rgb(0 0 0 / 0.55);
+    --shadow: 0 24px 60px -20px rgb(0 0 0 / 0.7);
+
+    --contour: #57564f;
+    --contour-index: #85837a;
+    --terrain-low: #151613;
+    --terrain-mid: #34362f;
+    --terrain-high: #8a8a80;
+    --terrain-vegetation: #27311f;
+    --terrain-shade: 1;
+    --tree: #7d9967;
+    --water: #1d3640;
+    --water-edge: #4e7886;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #121311;
+  --surface: #1a1b19;
+  --sunken: #242522;
+  --ink: #ecebe6;
+  --ink-2: #bdbab1;
+  --ink-3: #9a978d;
+  --ink-4: #5c5b55;
+  --line: #2b2c29;
+  --line-strong: #3b3c38;
+  --sage: #97ab86;
+  --sage-deep: #b9cba8;
+  --sage-soft: #2e3829;
+  --sage-wash: #1c2219;
+  --clay: #d9846a;
+  --clay-soft: #3a2620;
+  --overlay: rgb(0 0 0 / 0.55);
+  --shadow: 0 24px 60px -20px rgb(0 0 0 / 0.7);
+
+  --contour: #57564f;
+  --contour-index: #85837a;
+  --terrain-low: #151613;
+  --terrain-mid: #34362f;
+  --terrain-high: #8a8a80;
+  --terrain-vegetation: #27311f;
+  --terrain-shade: 1;
+  --tree: #7d9967;
+  --water: #1d3640;
+  --water-edge: #4e7886;
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -59,6 +129,7 @@
   --color-sage-wash: var(--sage-wash);
   --color-clay: var(--clay);
   --color-clay-soft: var(--clay-soft);
+  --color-overlay: var(--overlay);
 
   --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;

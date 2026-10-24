@@ -2,14 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconExercises, IconHistory, IconLandscape, IconReflection, IconToday, IconTrain } from "@/components/icons";
+import { IconExercises, IconGoal, IconHistory, IconLandscape, IconReflection, IconToday, IconTrain } from "@/components/icons";
 import { Wordmark } from "@/components/wordmark";
+import { ThemeSwitch } from "./theme-switch";
 import { cn } from "@/lib/utils";
 
 const PRIMARY = [
   { href: "/", label: "Today", icon: IconToday },
   { href: "/train", label: "Train", icon: IconTrain },
   { href: "/landscape", label: "Landscape", icon: IconLandscape },
+  { href: "/goals", label: "Goals", icon: IconGoal },
   { href: "/history", label: "History", icon: IconHistory },
 ] as const;
 
@@ -61,8 +63,9 @@ export function Sidebar({ name, email }: { name: string | null; email: string | 
       <div className="mt-auto border-t border-line px-3 pt-4">
         <p className="truncate text-[13px] font-medium">{name ?? "Your account"}</p>
         {email ? <p className="truncate text-xs text-ink-3">{email}</p> : null}
+        <ThemeSwitch className="mt-3 w-full" />
         <form action="/auth/sign-out" method="post">
-          <button className="mt-2 text-xs text-ink-3 underline-offset-4 hover:text-ink hover:underline">Sign out</button>
+          <button className="mt-3 text-xs text-ink-3 underline-offset-4 hover:text-ink hover:underline">Sign out</button>
         </form>
       </div>
     </aside>
@@ -71,7 +74,7 @@ export function Sidebar({ name, email }: { name: string | null; email: string | 
 
 export function MobileTabs() {
   const path = usePathname();
-  if (path === "/workout") return null;
+  if (path === "/workout" || path.startsWith("/landscape/explore")) return null;
   return (
     <nav
       aria-label="Main"

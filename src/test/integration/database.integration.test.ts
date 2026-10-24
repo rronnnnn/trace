@@ -67,6 +67,7 @@ function payload(over: { [k: string]: Json } = {}): Payload {
 }
 
 async function wipeB() {
+  await B.from("goals").delete().eq("owner_id", bUid);
   await B.from("workout_sessions").delete().eq("owner_id", bUid);
   await B.from("workout_templates").delete().eq("owner_id", bUid);
   await B.from("exercises").delete().eq("owner_id", bUid);
@@ -213,9 +214,34 @@ d("database audit", () => {
       await B.from("workout_sessions").delete().eq("id", id);
     });
 
+    it("goals are private and can only target exercises the owner can use", async () => {
+      const { data: g, error } = await A.from("goals")
+        .insert({ owner_id: aUid, exercise_id: bench, exercise_name: "Bench Press", target_weight: 100 })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      expect((await B.from("goals").select("id").eq("id", g!.id)).data).toEqual([]);
+      await B.from("goals").update({ target_weight: 1 }).eq("id", g!.id);
+      expect(Number((await A.from("goals").select("target_weight").eq("id", g!.id).single()).data!.target_weight)).toBe(100);
+
+      const onPrivate = await B.from("goals").insert({
+        owner_id: bUid,
+        exercise_id: aCustomExercise,
+        exercise_name: "x",
+        target_weight: 50,
+      });
+      expect(onPrivate.error?.code).toBe("42501");
+      const asA = await B.from("goals").insert({ owner_id: aUid, exercise_id: bench, exercise_name: "x", target_weight: 50 });
+      expect(asA.error?.code).toBe("42501");
+      const invalid = await B.from("goals").insert({ owner_id: bUid, exercise_id: bench, exercise_name: "x", target_weight: -5 });
+      expect(invalid.error?.code).toBe("23514");
+      await A.from("goals").delete().eq("id", g!.id);
+    });
+
     it("anonymous visitors get nothing", async () => {
       expect((await anon.from("workout_sessions").select("id")).data ?? []).toEqual([]);
       expect((await anon.from("exercises").select("id")).data ?? []).toEqual([]);
+      expect((await anon.from("goals").select("id")).data ?? []).toEqual([]);
       const { error } = await anon.rpc("complete_session", { payload: payload() });
       expect(error).not.toBeNull();
     });

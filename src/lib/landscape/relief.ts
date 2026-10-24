@@ -92,22 +92,12 @@ export function treePositions(terrain: Pick<Terrain, "field" | "cols" | "rows" |
       if (v < 0.5 || ((r >>> 20) % 1000) / 1000 > v * 0.55) continue;
       // keep clear of the water itself
       const ri = Math.round(jx * (water.river.length - 1));
-      if (water.river.length && Math.abs(water.river[ri][1] - jy) < 0.022) continue;
+      if (water.river.length && Math.abs(water.river[ri][1] - jy) < water.river[ri][2] + 0.02) continue;
       if (water.lakes.some((l) => ((jx - l.x) / (l.rx * 1.5)) ** 2 + ((jy - l.y) / (l.ry * 1.5)) ** 2 < 1)) continue;
       trees.push([jx, jy]);
     }
   }
   return trees;
-}
-
-/** Deterministic organic outline for a lake, as normalised points around its centre. */
-export function lakeOutline(l: { x: number; y: number; rx: number; ry: number; span: { start: string } }, points = 10): [number, number][] {
-  const h = hashString(l.span.start);
-  return Array.from({ length: points }, (_, k) => {
-    const a = (k / points) * Math.PI * 2;
-    const wobble = 0.82 + (((h >>> (k * 3)) % 37) / 37) * 0.32;
-    return [l.x + Math.cos(a) * l.rx * wobble, l.y + Math.sin(a) * l.ry * wobble] as [number, number];
-  });
 }
 
 /** Parses "#rrggbb" or "rgb(r g b)" / "rgb(r, g, b)" from a computed CSS custom property. */

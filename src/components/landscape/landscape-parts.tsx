@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { smoothPath, type ContourLine } from "@/lib/landscape/contours";
-import { lakeOutline, parseColor, shadeRelief, treePositions, type ReliefPalette } from "@/lib/landscape/relief";
-import type { Landmark, Terrain } from "@/lib/landscape/terrain";
+import { parseColor, shadeRelief, treePositions, type ReliefPalette } from "@/lib/landscape/relief";
+import type { Lake, Landmark, Terrain } from "@/lib/landscape/terrain";
 import { formatShortDate, formatVolume } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -192,37 +192,84 @@ export function ReliefLayer({ terrain, width, height }: { terrain: Terrain; widt
   );
 }
 
-/** River and lakes. Each lake is a run of rest days; its tooltip says which. */
-export function WaterLayer({ terrain, width, height }: { terrain: Terrain; width: number; height: number }) {
+/** Outline of the river as one filled ribbon: left bank downstream, right bank back up. */
+export function riverRibbon(river: [number, number, number][], width: number, height: number, from = 0, to = 1) {
+  const pts = river.filter(([x]) => x >= from && x <= to);
+  if (pts.length < 3) return "";
+  const step = Math.max(1, Math.round(pts.length / 90));
+  const sampled = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+  const left: [number, number][] = [];
+  const right: [number, number][] = [];
+  sampled.forEach(([x, y, w], i) => {
+    const a = sampled[Math.max(0, i - 1)];
+    const b = sampled[Math.min(sampled.length - 1, i + 1)];
+    const tx = (b[0] - a[0]) * width;
+    const ty = (b[1] - a[1]) * height;
+    const tl = Math.hypot(tx, ty) || 1;
+    const nx = -ty / tl;
+    const ny = tx / tl;
+    const half = w * height;
+    left.push([x * width + nx * half, y * height + ny * half]);
+    right.push([x * width - nx * half, y * height - ny * half]);
+  });
+  const ring = [...left, ...right.reverse()];
+  return smoothPath([...ring, ring[0]]);
+}
+
+/**
+ * The river: one continuous body of water flowing with time, widening into broad reaches and
+ * lakes on rest days. Each swell carries an invisible hit area with its dates.
+ */
+export function WaterLayer({
+  terrain,
+  width,
+  height,
+  highlight,
+  onRest,
+  restLabel = true,
+}: {
+  terrain: Terrain;
+  width: number;
+  height: number;
+  /** a stretch of river (normalised x range) to emphasise, e.g. the selected week */
+  highlight?: { from: number; to: number } | null;
+  onRest?: (span: Lake["span"]) => void;
+  restLabel?: boolean;
+}) {
   const { river, lakes } = terrain.water;
-  const step = Math.max(1, Math.round(river.length / 70));
-  const riverD =
-    river.length > 2
-      ? smoothPath(river.filter((_, i) => i % step === 0 || i === river.length - 1).map(([x, y]) => [x * width, y * height]))
-      : "";
+  const body = useMemo(() => riverRibbon(river, width, height), [river, width, height]);
+  const lit = useMemo(
+    () => (highlight ? riverRibbon(river, width, height, highlight.from, highlight.to) : ""),
+    [river, width, height, highlight],
+  );
+  if (!body) return null;
   return (
-    <g aria-hidden>
-      {riverD ? (
-        <>
-          <path d={riverD} fill="none" stroke="var(--water)" strokeWidth={width / 230} strokeLinecap="round" strokeLinejoin="round" />
-          <path d={riverD} fill="none" stroke="var(--water-edge)" strokeWidth={width / 700} strokeLinecap="round" strokeOpacity={0.8} />
-        </>
-      ) : null}
-      {lakes.map((l) => {
-        const pts = lakeOutline(l).map(([x, y]) => [x * width, y * height] as [number, number]);
-        return (
-          <path
-            key={l.span.start}
-            d={smoothPath([...pts, pts[0]])}
-            fill="var(--water)"
-            stroke="var(--water-edge)"
-            strokeWidth={0.9}
-            vectorEffect="non-scaling-stroke"
-          >
-            <title>{l.span.label}</title>
-          </path>
-        );
-      })}
+    <g>
+      <path
+        d={body}
+        fill="var(--water)"
+        stroke="var(--water-edge)"
+        strokeWidth={0.9}
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+        aria-hidden
+      />
+      {lit ? <path d={lit} fill="var(--water-edge)" fillOpacity={0.55} aria-hidden /> : null}
+      {lakes.map((l) => (
+        <ellipse
+          key={l.span.start}
+          cx={l.x * width}
+          cy={l.y * height}
+          rx={l.rx * width}
+          ry={Math.max(l.ry * height, 6)}
+          fill="transparent"
+          className={onRest ? "cursor-pointer" : undefined}
+          onClick={onRest ? () => onRest(l.span) : undefined}
+          aria-hidden
+        >
+          {restLabel ? <title>{l.span.label}</title> : null}
+        </ellipse>
+      ))}
     </g>
   );
 }

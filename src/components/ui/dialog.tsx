@@ -6,11 +6,11 @@ import { cn } from "@/lib/utils";
 import { Button } from "./button";
 
 const overlay =
-  "fixed inset-0 z-50 bg-[#1d1c1a]/25 data-[state=open]:animate-[fade-in_160ms_ease-out] data-[state=closed]:animate-[fade-out_120ms_ease-in]";
+  "fixed inset-0 z-50 bg-overlay data-[state=open]:animate-[fade-in_160ms_ease-out] data-[state=closed]:animate-[fade-out_120ms_ease-in]";
 
 /** Centered on desktop, bottom sheet on mobile. */
 const panel = cn(
-  "fixed z-50 bg-surface shadow-[0_24px_60px_-20px_rgba(29,28,26,0.35)] focus:outline-none",
+  "fixed z-50 bg-surface shadow-[var(--shadow)] focus:outline-none",
   "inset-x-0 bottom-0 max-h-[88dvh] overflow-y-auto rounded-t-xl border-t border-line pb-[env(safe-area-inset-bottom)]",
   "sm:inset-auto sm:left-1/2 sm:top-1/2 sm:w-[min(92vw,440px)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-lg sm:border",
   "data-[state=open]:animate-[sheet-in_240ms_var(--ease-out)]",

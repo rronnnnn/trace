@@ -100,12 +100,37 @@ describe("terrain", () => {
     expect(a.landmarks.map((l) => [l.x, l.y])).toEqual(b.landmarks.map((l) => [l.x, l.y]));
   });
 
-  it("differs per person and places sessions in time order", () => {
+  it("differs per person and climbs each routine's range in time order", () => {
     const a = buildTerrain({ ...opts, sessions: toLandscapeSessions(sessions, none) });
     const c = buildTerrain({ ...opts, seed: "user-2", sessions: toLandscapeSessions(sessions, none) });
     expect(Array.from(a.field)).not.toEqual(Array.from(c.field));
-    const xs = a.landmarks.map((l) => l.x);
-    expect([...xs].sort((p, q) => p - q)).toEqual(xs);
+    for (const band of a.bands) {
+      const along = a.landmarks
+        .filter((l) => l.session.templateKey === band)
+        .sort((p, q) => p.session.endedAt.localeCompare(q.session.endedAt))
+        .map((l) => l.u);
+      expect([...along].sort((p, q) => p - q)).toEqual(along);
+    }
+  });
+
+  it("gives routines differently oriented ranges", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      id: `m${i}`,
+      endedAt: new Date(Date.parse("2026-09-29T10:00:00Z") + i * 2 * 86400000).toISOString(),
+      templateKey: `t${i % 4}`,
+      label: "x",
+      volume: 3000,
+      sets: 10,
+      prCount: 0,
+    }));
+    const t = buildTerrain({ ...opts, sessions: many });
+    const angle = (band: string) => {
+      const ls = t.landmarks.filter((l) => l.session.templateKey === band).sort((p, q) => p.u - q.u);
+      return Math.atan2(ls.at(-1)!.y - ls[0].y, (ls.at(-1)!.x - ls[0].x) * (5 / 3));
+    };
+    const angles = t.bands.map(angle);
+    const spread = Math.max(...angles) - Math.min(...angles);
+    expect(spread).toBeGreaterThan(0.5); // not all parallel
   });
 
   it("raises terrain where training happened", () => {

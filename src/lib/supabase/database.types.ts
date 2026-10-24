@@ -166,6 +166,22 @@ export type Database = {
           FK<"personal_records_session_set_id_fkey", "session_set_id", "session_sets">,
         ]
       >;
+      goals: Table<
+        {
+          id: string;
+          owner_id: string;
+          exercise_id: string;
+          exercise_name: string;
+          target_weight: number | null;
+          target_reps: number;
+          note: string | null;
+          achieved_at: string | null;
+          archived_at: string | null;
+          created_at: string;
+        },
+        "exercise_id" | "exercise_name",
+        [FK<"goals_exercise_id_fkey", "exercise_id", "exercises">]
+      >;
       body_measurements: Table<
         {
           id: string;

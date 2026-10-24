@@ -53,8 +53,9 @@ sets, the rest timer and finishing a workout all work offline once the page is o
 
 ## Training Landscape
 
-`/landscape` maps persisted history. Time runs left to right. Each routine forms a ridge that meanders over time, and a
-session sits above or below its ridge depending on its volume compared with that routine's average. Hill height
+`/landscape` maps persisted history. Each routine raises its own mountain range along a seeded, freeform spine
+(diagonal, vertical, arcing), climbed session by session in time order; a session sits off the crest when its volume
+differs from that routine's average. The river is the time axis, oldest at the left. Hill height
 follows volume relative to your own training, and records (measured, never baselines or estimates) are landmarks.
 With an exercise selected, the terrain is rebuilt from that exercise's volume alone.
 
@@ -76,6 +77,26 @@ Rendering (`src/lib/landscape/relief.ts`, `rest.ts`):
 - Empty, filtered-empty and sparse states each have their own message.
 - Logic lives in `src/lib/landscape/explore.ts` (pure, unit-tested). Interactions are tested in jsdom
   (`landscape-explorer.test.tsx`).
+
+### Explore
+
+`/landscape/explore` is the full-screen map: drag to pan, scroll or pinch to zoom, double-tap to zoom in, arrows and
++/−/0 on the keyboard. Detail grows with zoom: denser contours, then session dates and rest labels. Range names
+label each routine. A perspective tilt (3D, on by default) can be switched off. Camera maths lives in
+`src/lib/landscape/viewport.ts` (unit-tested).
+
+## Goals
+
+`/goals`: a goal is an exercise and a summit, either a weight for at least N reps or, for bodyweight moves, N reps.
+Progress is derived from recorded sets only (heaviest qualifying weight or most reps; never estimates) and drawn as a
+side view of a mountain whose peak is the goal (`GoalMountain`). The climber is a slot (`renderClimber`) for a custom
+animation. Reaching the target stamps `achieved_at` from the session that did it. Data: `goals` table, RLS, and a
+reference policy for exercises.
+
+## Appearance
+
+System, Light or Dark (sidebar on desktop; account button on mobile). Every colour is a CSS token with a dark set;
+the choice is applied before first paint.
 
 ## Testing
 

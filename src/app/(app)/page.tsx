@@ -171,10 +171,15 @@ export default async function TodayPage() {
             />
           </div>
           <figcaption className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[12px] text-ink-3">
-            <Link href="/landscape" className="group flex items-center gap-1.5 text-ink-2 hover:text-ink">
-              Your landscape · {WINDOW_WEEKS} weeks{landscape.length ? "" : " · it takes shape as you train"}
-              <IconArrowRight className="transition-transform duration-200 group-hover:translate-x-0.5" />
-            </Link>
+            <span className="flex items-center gap-4">
+              <Link href="/landscape" className="text-ink-2 hover:text-ink">
+                Your landscape · {WINDOW_WEEKS} weeks
+              </Link>
+              <Link href="/landscape/explore" className="group flex items-center gap-1.5 font-medium text-ink hover:text-ink">
+                Explore landscape
+                <IconArrowRight className="transition-transform duration-200 group-hover:translate-x-0.5" />
+              </Link>
+            </span>
             <span className="flex items-center gap-4">
               <span className="flex items-center gap-1.5">
                 <span className="size-2 rounded-full bg-sage-deep ring-2 ring-sage-soft" aria-hidden /> Record

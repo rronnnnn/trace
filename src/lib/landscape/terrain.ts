@@ -4,10 +4,12 @@ import type { RestSpan } from "./rest";
  * Training Landscape terrain.
  *
  * Every visible feature comes from data and is reproducible:
- *  - x is time. Each session sits at its date within the window.
- *  - y is the routine. Sessions of the same template share a latitude band that meanders
- *    along time, so a program reads as a set of ridgelines. Within its band a session sits
- *    higher when its volume is above that routine's average and lower when below.
+ *  - each routine is a mountain range raised along its own spine: a gentle curve whose
+ *    position, angle (diagonal, vertical, arcing…) and curvature are seeded by the routine and
+ *    the user. Its sessions climb the spine in order, first session at one foot, newest at the
+ *    far end. A session sits off the spine when its volume differs from that routine's average.
+ *  - time flows with the river, oldest at the left edge, today at the right. Rest days swell
+ *    the river into broad reaches and lakes at their dates.
  *  - a session raises a hill whose height follows its working volume (relative to the
  *    user's own sessions, never an absolute claim about muscle) and whose footprint follows
  *    the number of completed sets.
@@ -31,6 +33,8 @@ export type Landmark = {
   x: number;
   y: number;
   height: number;
+  /** 0–1 position along the routine's spine (chronological) */
+  u: number;
 };
 
 export type Lake = {
@@ -43,8 +47,9 @@ export type Lake = {
 };
 
 export type Water = {
-  /** river centre line, normalised [x, y] points left to right */
-  river: [number, number][];
+  /** river centre line, normalised [x, y, halfWidth] left to right; halfWidth in y units */
+  river: [number, number, number][];
+  /** hit areas for the swells, one per rest span */
   lakes: Lake[];
 };
 
@@ -138,6 +143,47 @@ function ridged(seed: number, x: number, y: number) {
   return sum;
 }
 
+/**
+ * A routine's range: a quadratic curve through a seeded centre, at a seeded angle and
+ * curvature. Centres spread around the map so ranges rarely sit on top of each other.
+ * Returns u → [x, y, normalX, normalY] in normalised map units (normals in screen space).
+ */
+function rangeSpine(key: string, k: number, n: number, seed: string, aspect: number) {
+  const h = hashString(`${key}:${seed}`);
+  const r1 = (h % 1000) / 1000;
+  const r2 = ((h >>> 10) % 1000) / 1000;
+  const r3 = ((h >>> 20) % 1000) / 1000;
+  const turn = ((hashString(seed) % 1000) / 1000) * Math.PI * 2;
+  // centre: on a loose ring for several routines, mid-map for one
+  const ring = n === 1 ? 0 : n === 2 ? 0.22 : 0.3;
+  const a = turn + (k / n) * Math.PI * 2 + (r1 - 0.5) * 0.5;
+  const cx = (0.5 + ring * 0.95 * Math.cos(a)) * aspect;
+  const cy = 0.5 + ring * 0.78 * Math.sin(a);
+  // orientation: anything from horizontal to vertical, never a uniform set
+  const angles = [0.15, 0.7, 1.45, -0.6, 2.4, 1.05, -1.25];
+  const theta = angles[(h >>> 3) % angles.length] + (r2 - 0.5) * 0.4;
+  const len = (0.42 + 0.22 * r3) * Math.min(aspect, 1.6);
+  const bend = (r1 - 0.5) * 0.7;
+  const dx = Math.cos(theta);
+  const dy = Math.sin(theta);
+  const ax = cx - (dx * len) / 2;
+  const ay = cy - (dy * len) / 2;
+  const bx = cx + (dx * len) / 2;
+  const by = cy + (dy * len) / 2;
+  const qx = cx - dy * bend * len;
+  const qy = cy + dx * bend * len;
+  return (u: number): [number, number, number, number] => {
+    const v = 1 - u;
+    const x = v * v * ax + 2 * v * u * qx + u * u * bx;
+    const y = v * v * ay + 2 * v * u * qy + u * u * by;
+    const tx = 2 * v * (qx - ax) + 2 * u * (bx - qx);
+    const ty = 2 * v * (qy - ay) + 2 * u * (by - qy);
+    const tl = Math.hypot(tx, ty) || 1;
+    // clamp the spine into the map so no range runs off the edge
+    return [Math.min(0.94, Math.max(0.06, x / aspect)), Math.min(0.9, Math.max(0.1, y)), -ty / tl, tx / tl];
+  };
+}
+
 // ── terrain ──────────────────────────────────────────────────────────────────
 
 export function buildTerrain({ sessions, seed, start, end, cols = 120, rows = 72, aspect = 5 / 3, rest = [] }: TerrainOptions): Terrain {
@@ -145,7 +191,6 @@ export function buildTerrain({ sessions, seed, start, end, cols = 120, rows = 72
   const field = new Float32Array(cols * rows);
 
   const t0 = start.getTime();
-  const span = Math.max(1, end.getTime() - t0);
   const inWindow = sessions.filter((x) => {
     const t = new Date(x.endedAt).getTime();
     return t >= t0 && t <= end.getTime();
@@ -156,39 +201,42 @@ export function buildTerrain({ sessions, seed, start, end, cols = 120, rows = 72
   for (const x of [...inWindow].sort((a, b) => a.endedAt.localeCompare(b.endedAt))) {
     if (!bands.includes(x.templateKey)) bands.push(x.templateKey);
   }
-  const bandY = (key: string) => {
-    const n = Math.max(bands.length, 1);
-    const i = bands.indexOf(key);
-    // spread bands across the middle 70%, with a seeded wobble so it never looks gridded
-    const base = n === 1 ? 0.5 : 0.18 + (0.64 * i) / (n - 1);
-    return base + ((hashString(key + seed) % 1000) / 1000 - 0.5) * 0.08;
-  };
+  const spines = new Map(bands.map((key, k) => [key, rangeSpine(key, k, bands.length, seed, aspect)]));
 
-  const maxVolume = Math.max(1, ...inWindow.map((x) => x.volume));
-  const maxSets = Math.max(1, ...inWindow.map((x) => x.sets));
-
-  // Each routine's typical volume, so a session can sit above or below its own ridge.
+  // Each routine's typical volume, so a session can sit off its spine when it differs.
   const meanVolume = new Map<string, number>();
   for (const key of bands) {
     const vols = inWindow.filter((x) => x.templateKey === key).map((x) => x.volume);
     meanVolume.set(key, vols.reduce((a, b) => a + b, 0) / Math.max(1, vols.length));
   }
 
+  const maxVolume = Math.max(1, ...inWindow.map((x) => x.volume));
+  const maxSets = Math.max(1, ...inWindow.map((x) => x.sets));
+
+  const rank = new Map<string, number>();
+  const counts = new Map<string, number>();
+  for (const x of [...inWindow].sort((a, b) => a.endedAt.localeCompare(b.endedAt) || a.id.localeCompare(b.id))) {
+    const n = counts.get(x.templateKey) ?? 0;
+    rank.set(x.id, n);
+    counts.set(x.templateKey, n + 1);
+  }
+
   const landmarks: Landmark[] = inWindow.map((x) => {
-    const t = (new Date(x.endedAt).getTime() - t0) / span;
-    const nx = timeToX(t);
-    // ridges meander along time with a phase unique to the routine (and the user)
-    const phase = (hashString(x.templateKey + seed) % 628) / 100;
-    const meander = 0.055 * Math.sin(nx * Math.PI * 2.2 + phase);
-    // heavier-than-usual sessions climb toward the top of their ridge, lighter ones settle below
+    const n = counts.get(x.templateKey)!;
+    const u = n === 1 ? 0.5 : 0.06 + (0.88 * rank.get(x.id)!) / (n - 1);
+    const spine = spines.get(x.templateKey)!;
+    const [px, py, nx, ny] = spine(u);
+    // heavier-than-usual sessions sit to one side of the crest, lighter ones to the other
     const mean = meanVolume.get(x.templateKey) || 1;
-    const lift = Math.max(-0.35, Math.min(0.35, (x.volume - mean) / mean)) * -0.1;
-    const jitter = ((hashString(x.id) % 1000) / 1000 - 0.5) * 0.025;
+    const lift = Math.max(-0.35, Math.min(0.35, (x.volume - mean) / mean)) * 0.09;
+    const jitter = ((hashString(x.id) % 1000) / 1000 - 0.5) * 0.03;
+    const off = lift + jitter;
     return {
       session: x,
-      x: nx,
-      y: Math.min(0.9, Math.max(0.1, bandY(x.templateKey) + meander + lift + jitter)),
+      x: Math.min(0.96, Math.max(0.04, px + (nx * off) / aspect)),
+      y: Math.min(0.93, Math.max(0.07, py + ny * off)),
       height: 0,
+      u,
     };
   });
 
@@ -271,7 +319,8 @@ function carveWater(
   // small price for each change of row, so the river meanders instead of zig-zagging.
   const edge = (j: number) => {
     const ny = j / (rows - 1);
-    return ny < 0.14 || ny > 0.86 ? 0.6 : 0;
+    // stay off the map edges, and drift toward the middle rather than hugging a border
+    return (ny < 0.14 || ny > 0.86 ? 0.6 : 0) + 0.9 * (ny - 0.5) * (ny - 0.5);
   };
   const cost = new Float32Array(cols * rows);
   const from = new Int16Array(cols * rows);
@@ -314,7 +363,29 @@ function carveWater(
     }
     return sum / n / (rows - 1);
   });
-  const river: [number, number][] = yAt.map((y, i) => [i / (cols - 1), y]);
+  // Width: a slender stream that swells smoothly into broad reaches at rest spans, so the
+  // water is one continuous river and rest reads as where it widens and slows.
+  const BASE = 0.0032;
+  const swells = rest.map((span) => {
+    const x = dateToX(span.at, start, end);
+    // spread in x roughly matches the span's length on the time axis, never thinner than a pool
+    const spread = Math.max(0.005, (span.days / Math.max(1, (end.getTime() - start.getTime()) / 86400000)) * 0.88 * 0.5);
+    // a day off is a bulge in the stream, a weekend a small lake, a longer rest a broad one
+    const amp = 0.0022 + 0.0042 * Math.pow(span.days, 0.85);
+    return { x, spread, amp, span };
+  });
+  const widthAt = (x: number) => {
+    let w = BASE;
+    for (const sw of swells) {
+      const d = (x - sw.x) / sw.spread;
+      if (d * d < 25) w += sw.amp * Math.exp(-(d * d) / 2);
+    }
+    return w;
+  };
+  const river: [number, number, number][] = yAt.map((y, i) => {
+    const x = i / (cols - 1);
+    return [x, y, widthAt(x) * aspect * 0.6];
+  });
 
   const riverY = (x: number) => {
     const f = Math.min(cols - 1, Math.max(0, x * (cols - 1)));
@@ -323,19 +394,16 @@ function carveWater(
     return yAt[i] * (1 - t) + (yAt[Math.min(cols - 1, i + 1)] ?? yAt[i]) * t;
   };
 
-  const lakes: Lake[] = rest.map((span) => {
-    const x = dateToX(span.at, start, end);
-    // A single rest day is a small pool; longer rests make larger lakes (gently: a week off
-    // is a lake, not a sea). Pools sit just off the river on alternating banks so the water
-    // reads as a valley system rather than a chain of beads.
-    const rx = span.days === 1 ? 0.0055 : 0.006 + 0.0085 * Math.sqrt(span.days);
-    const ry = rx * aspect * 0.6;
-    const side = hashString(span.start) % 2 ? 1 : -1;
-    const offset = span.days === 1 ? side * ry * 1.4 : side * ry * 0.35;
-    return { x, y: riverY(x) + offset, rx, ry, span };
-  });
+  // Hit areas for tooltips and selection: one per swell.
+  const lakes: Lake[] = swells.map((sw) => ({
+    x: sw.x,
+    y: riverY(sw.x),
+    rx: sw.spread * 1.6,
+    ry: widthAt(sw.x) * aspect * 0.6,
+    span: sw.span,
+  }));
 
-  // Carve: a shallow trench along the river, a basin under each lake.
+  // Carve a valley under the river, deeper and wider where it swells, so contours follow it.
   let lo = Infinity;
   let hi = -Infinity;
   for (const h of field) {
@@ -343,20 +411,13 @@ function carveWater(
     if (h > hi) hi = h;
   }
   const depth = (hi - lo) * 0.16;
-  const trench = 0.018;
-  for (let j = 0; j < rows; j++) {
-    const ny = j / (rows - 1);
-    for (let i = 0; i < cols; i++) {
-      const nx = i / (cols - 1);
-      const dy = ny - yAt[i];
-      let cut = 0.45 * Math.exp(-(dy * dy) / (2 * trench * trench));
-      for (const l of lakes) {
-        const ex = (nx - l.x) / (l.rx * 1.8);
-        const ey = (ny - l.y) / (l.ry * 1.8);
-        const e2 = ex * ex + ey * ey;
-        if (e2 < 9) cut = Math.max(cut, Math.exp(-e2 / 2));
-      }
-      field[j * cols + i] -= depth * cut;
+  // One smooth valley profile along the whole river (varying it per column streaks the shading).
+  const sigma = 0.035;
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) {
+      const dy = j / (rows - 1) - yAt[i];
+      if (Math.abs(dy) > sigma * 4) continue;
+      field[j * cols + i] -= depth * 0.6 * Math.exp(-(dy * dy) / (2 * sigma * sigma));
     }
   }
 

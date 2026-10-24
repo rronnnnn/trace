@@ -97,3 +97,13 @@ export const IconBarbell = (p: P) => (
     <path d="M3 14h22M7 9v10M21 9v10M4.5 11v6M23.5 11v6" />
   </svg>
 );
+export const IconGoal = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 16V2.5M4 3h8.5l-1.8 2.75L12.5 8.5H4" />
+  </svg>
+);
+export const IconExpand = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M10.5 2.5h5v5M7.5 15.5h-5v-5M15.5 2.5 10 8M2.5 15.5 8 10" />
+  </svg>
+);

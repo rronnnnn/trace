@@ -131,6 +131,14 @@ export function LandscapeExplorer({
   };
 
   const months = useMemo(() => monthTicks(start, end), [start, end]);
+  // The river is the time axis: a selected week lights up its stretch of water.
+  const weekStretch = useMemo(
+    () =>
+      selectedWeek
+        ? { from: dateToX(`${selectedWeek.start}T00:00:00Z`, start, end), to: dateToX(`${selectedWeek.end}T23:59:59Z`, start, end) }
+        : null,
+    [selectedWeek, start, end],
+  );
   const hoverMark = terrain.landmarks.find((l) => l.session.id === hover);
   const empty = totalSessionsEver === 0;
   const emptyHere = !empty && visible.length === 0;
@@ -204,9 +212,8 @@ export function LandscapeExplorer({
             <svg viewBox={`0 0 ${W} ${H}`} className="block h-full w-full" role="group" aria-labelledby={titleId}>
               <title id={titleId}>{`Training landscape: ${plural(visible.length, "session")} shown`}</title>
               <ReliefLayer terrain={terrain} width={W} height={H} />
-              {selectedWeek ? <WeekBand week={selectedWeek} start={start} end={end} /> : null}
               <ContourLayer lines={lines} fade={empty || emptyHere ? 0.55 : 1} />
-              <WaterLayer terrain={terrain} width={W} height={H} />
+              <WaterLayer terrain={terrain} width={W} height={H} highlight={weekStretch} />
               <VegetationLayer terrain={terrain} seed={seed} width={W} height={H} />
               <g aria-hidden>
                 {months.map((m) => (
@@ -306,8 +313,8 @@ export function LandscapeExplorer({
               {sparse
                 ? "Early terrain. Each session you record adds relief."
                 : sel.exerciseId
-                  ? "Hill height follows this exercise's volume in each session."
-                  : "Hill height follows each session's volume relative to your own training."}
+                  ? "Each range climbs with this exercise's sessions. The river runs through time; rest widens it."
+                  : "Each routine is a range, climbed session by session. The river runs through time; rest widens it."}
             </span>
             <span className="flex items-center gap-4">
               <span className="flex items-center gap-1.5">
@@ -378,36 +385,6 @@ export function LandscapeExplorer({
 
 // ── map pieces ───────────────────────────────────────────────────────────────
 
-function WeekBand({ week, start, end }: { week: { start: string; end: string }; start: Date; end: Date }) {
-  const x1 = dateToX(`${week.start}T00:00:00Z`, start, end) * W;
-  const x2 = dateToX(`${week.end}T23:59:59Z`, start, end) * W;
-  return (
-    <g aria-hidden>
-      <rect x={x1} y={0} width={Math.max(4, x2 - x1)} height={H} fill="var(--sage)" fillOpacity={0.07} />
-      <line
-        x1={x1}
-        x2={x1}
-        y1={0}
-        y2={H}
-        stroke="var(--sage)"
-        strokeOpacity={0.45}
-        strokeDasharray="3 4"
-        vectorEffect="non-scaling-stroke"
-      />
-      <line
-        x1={x2}
-        x2={x2}
-        y1={0}
-        y2={H}
-        stroke="var(--sage)"
-        strokeOpacity={0.45}
-        strokeDasharray="3 4"
-        vectorEffect="non-scaling-stroke"
-      />
-    </g>
-  );
-}
-
 function MapNotice({ title, body, action }: { title: string; body: string; action?: React.ReactNode }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center p-6">
@@ -420,7 +397,7 @@ function MapNotice({ title, body, action }: { title: string; body: string; actio
   );
 }
 
-function monthTicks(start: Date, end: Date) {
+export function monthTicks(start: Date, end: Date) {
   const ticks: { key: string; x: number; label: string }[] = [];
   const d = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
   const spanMonths = (end.getTime() - start.getTime()) / (30 * 86400000);
@@ -658,7 +635,7 @@ function SampleTag() {
   );
 }
 
-function SessionDetail({
+export function SessionDetail({
   session: s,
   exerciseId,
   unit,
