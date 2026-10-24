@@ -133,8 +133,9 @@ export function contourLines(
 }
 
 /** Quadratic smoothing through segment midpoints. */
-function smoothPath(pts: Pt[]): string {
-  const f = (n: number) => Math.round(n * 10) / 10;
+export function smoothPath(pts: Pt[]): string {
+  // whole viewBox units: invisible at map scale, and a third less path data
+  const f = (n: number) => Math.round(n);
   if (pts.length < 3) return `M${f(pts[0][0])} ${f(pts[0][1])}L${f(pts.at(-1)![0])} ${f(pts.at(-1)![1])}`;
   const closed = pts[0][0] === pts.at(-1)![0] && pts[0][1] === pts.at(-1)![1];
   const mid = (a: Pt, b: Pt): Pt => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
@@ -160,4 +161,28 @@ function smoothPath(pts: Pt[]): string {
 
 export function evenLevels(count: number, min = 0.04, max = 0.98) {
   return Array.from({ length: count }, (_, i) => min + ((max - min) * i) / (count - 1));
+}
+
+/**
+ * Bilinear resample of a height field. Contours are traced on a coarser copy than the relief
+ * raster: the shading carries fine crag detail, the lines stay calm and the path data small.
+ */
+export function resampleField(field: Float32Array, cols: number, rows: number, toCols: number, toRows: number) {
+  const out = new Float32Array(toCols * toRows);
+  for (let j = 0; j < toRows; j++) {
+    const fy = (j / (toRows - 1)) * (rows - 1);
+    const y0 = Math.floor(fy);
+    const y1 = Math.min(rows - 1, y0 + 1);
+    const ty = fy - y0;
+    for (let i = 0; i < toCols; i++) {
+      const fx = (i / (toCols - 1)) * (cols - 1);
+      const x0 = Math.floor(fx);
+      const x1 = Math.min(cols - 1, x0 + 1);
+      const tx = fx - x0;
+      const top = field[y0 * cols + x0] * (1 - tx) + field[y0 * cols + x1] * tx;
+      const bottom = field[y1 * cols + x0] * (1 - tx) + field[y1 * cols + x1] * tx;
+      out[j * toCols + i] = top * (1 - ty) + bottom * ty;
+    }
+  }
+  return out;
 }

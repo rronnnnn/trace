@@ -75,13 +75,13 @@ export default async function LandscapePage({ searchParams }: PageProps<"/landsc
   const week = typeof sp.week === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sp.week) ? sp.week : null;
 
   return (
-    <main className="mx-auto w-full max-w-[1240px] px-5 pb-20 pt-8 sm:px-8 md:pt-14 lg:px-14">
+    <main className="mx-auto w-full max-w-[1440px] px-4 pb-20 pt-8 sm:px-8 md:pt-14 lg:px-12">
       <header>
         <p className="eyebrow">Training landscape</p>
         <h1 className="mt-3 font-serif text-[36px] leading-[1.05] tracking-[-0.02em] sm:text-[52px]">Your training, mapped.</h1>
         <p className="mt-3 max-w-2xl text-[15px] text-ink-2">
-          Time runs left to right. Each routine forms its own ridge, each session raises a hill in proportion to its volume, and records
-          stand as landmarks.
+          Time runs left to right. Each routine raises its own range, every session builds it higher in proportion to its volume, and
+          records stand as landmarks. Rest days collect as lakes along the river in the valley.
         </p>
       </header>
       <LandscapeView
@@ -93,6 +93,7 @@ export default async function LandscapePage({ searchParams }: PageProps<"/landsc
         unit={profile.unit}
         muscles={muscles}
         totalSessionsEver={totalSessionsEver ?? 0}
+        trainingDays={profile.training_days}
         initial={{
           templateId: param(sp.workout),
           exerciseId: param(sp.exercise),

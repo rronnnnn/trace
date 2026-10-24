@@ -152,7 +152,7 @@ export default async function TodayPage() {
         </div>
 
         <figure className="flex flex-col">
-          <div className="relative aspect-[6/5] overflow-hidden rounded-md border border-line bg-surface/60 md:aspect-auto md:flex-1">
+          <div className="relative aspect-[6/5] min-h-[420px] overflow-hidden rounded-md border border-line bg-surface/60 md:aspect-auto md:flex-1">
             <LandscapeMap
               sessions={landscape}
               seed={userId}
@@ -166,6 +166,8 @@ export default async function TodayPage() {
               unit={unit}
               className="absolute inset-0"
               label="Training landscape, last 12 weeks"
+              trainingDays={profile.training_days}
+              timeZone={tz}
             />
           </div>
           <figcaption className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[12px] text-ink-3">
@@ -179,6 +181,9 @@ export default async function TodayPage() {
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="size-2 rounded-full border border-ink-2 bg-surface" aria-hidden /> Session
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-3 rounded-full border border-[var(--water-edge)] bg-[var(--water)]" aria-hidden /> Rest
               </span>
             </span>
           </figcaption>

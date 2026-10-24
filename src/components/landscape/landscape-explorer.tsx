@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { IconArrowLeft, IconArrowRight } from "@/components/icons";
 import { buttonClass } from "@/components/ui/button";
-import { contourLines, evenLevels } from "@/lib/landscape/contours";
+import { contourLines, evenLevels, resampleField } from "@/lib/landscape/contours";
 import {
   achievedRecords,
   exerciseOptions,
@@ -22,15 +22,17 @@ import {
   type RangeId,
   type Window,
 } from "@/lib/landscape/explore";
+import { addDays } from "@/lib/dates";
+import { restSpans } from "@/lib/landscape/rest";
 import { buildTerrain, dateToX } from "@/lib/landscape/terrain";
 import { formatDuration, formatLongDate, formatNumber, formatShortDate, formatVolume, formatWeight, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { ContourLayer, MapTooltip, MarkerGlyph, markerLabel } from "./landscape-parts";
+import { ContourLayer, MapTooltip, MarkerGlyph, markerLabel, ReliefLayer, VegetationLayer, WaterLayer } from "./landscape-parts";
 
 export type Selection = Filters & { week: string | null; session: string | null };
 
 const W = 1000;
-const H = 600;
+const H = 640;
 
 export function LandscapeExplorer({
   sessions,
@@ -41,6 +43,7 @@ export function LandscapeExplorer({
   unit,
   muscles,
   totalSessionsEver,
+  trainingDays = [],
   initial,
   onRangeChange,
   onSelectionChange,
@@ -53,6 +56,8 @@ export function LandscapeExplorer({
   unit: string;
   muscles: Record<string, string>;
   totalSessionsEver: number;
+  /** ISO weekdays of the user's plan; the open days become water. */
+  trainingDays?: number[];
   initial: Selection;
   onRangeChange: (r: RangeId) => void;
   onSelectionChange?: (s: Selection) => void;
@@ -79,18 +84,33 @@ export function LandscapeExplorer({
   const start = useMemo(() => new Date(win.start), [win.start]);
   const end = useMemo(() => new Date(win.end), [win.end]);
 
+  // Rest follows the calendar, not the filters: water stays put while you explore.
+  const rest = useMemo(
+    () => restSpans({ start, end, timeZone, trainingDays, sessionEndedAts: sessions.map((s) => s.endedAt) }),
+    [start, end, timeZone, trainingDays, sessions],
+  );
+  const restDays = useMemo(() => {
+    const days = new Set<string>();
+    for (const r of rest) for (let k = r.start; k <= r.end; k = addDays(k, 1)) days.add(k);
+    return days;
+  }, [rest]);
+
   const { terrain, lines } = useMemo(() => {
     const terrain = buildTerrain({
       sessions: toLandscapeSessions(sessions, filters),
       seed,
       start,
       end,
-      cols: 130,
-      rows: 78,
+      cols: 190,
+      rows: 122,
       aspect: W / H,
+      rest,
     });
-    return { terrain, lines: contourLines(terrain.field, terrain.cols, terrain.rows, W, H, evenLevels(17)) };
-  }, [sessions, filters, seed, start, end]);
+    const cc = 120;
+    const cr = Math.round(cc * (H / W));
+    const coarse = resampleField(terrain.field, terrain.cols, terrain.rows, cc, cr);
+    return { terrain, lines: contourLines(coarse, cc, cr, W, H, evenLevels(18)) };
+  }, [sessions, filters, seed, start, end, rest]);
 
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
   // A selected session hidden by the current filters is not shown out of context.
@@ -177,14 +197,17 @@ export function LandscapeExplorer({
         ) : null}
       </div>
 
-      <div className="mt-6 grid gap-8 lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-10">
+      <div className="mt-6 grid gap-8 xl:grid-cols-[minmax(0,1fr)_320px] xl:gap-10">
         {/* Map + week navigator */}
         <div className="min-w-0">
           <div className="relative overflow-hidden rounded-md border border-line bg-surface/60" style={{ aspectRatio: `${W} / ${H}` }}>
             <svg viewBox={`0 0 ${W} ${H}`} className="block h-full w-full" role="group" aria-labelledby={titleId}>
               <title id={titleId}>{`Training landscape: ${plural(visible.length, "session")} shown`}</title>
+              <ReliefLayer terrain={terrain} width={W} height={H} />
               {selectedWeek ? <WeekBand week={selectedWeek} start={start} end={end} /> : null}
               <ContourLayer lines={lines} fade={empty || emptyHere ? 0.55 : 1} />
+              <WaterLayer terrain={terrain} width={W} height={H} />
+              <VegetationLayer terrain={terrain} seed={seed} width={W} height={H} />
               <g aria-hidden>
                 {months.map((m) => (
                   <g key={m.key}>
@@ -293,6 +316,9 @@ export function LandscapeExplorer({
               <span className="flex items-center gap-1.5">
                 <span className="size-2 rounded-full border border-ink-2 bg-surface" aria-hidden /> Session
               </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-3 rounded-full border border-[var(--water-edge)] bg-[var(--water)]" aria-hidden /> Rest days
+              </span>
             </span>
           </div>
 
@@ -310,7 +336,7 @@ export function LandscapeExplorer({
         <aside
           aria-live="polite"
           aria-label="Details"
-          className="min-w-0 border-t border-line pt-6 lg:border-l lg:border-t-0 lg:pl-10 lg:pt-0"
+          className="min-w-0 border-t border-line pt-6 xl:border-l xl:border-t-0 xl:pl-10 xl:pt-0"
         >
           {selectedSession ? (
             <SessionDetail
@@ -325,6 +351,7 @@ export function LandscapeExplorer({
               week={selectedWeek}
               sessions={visible.filter((s) => weekOfSession(s, win.weeks, timeZone)?.key === selectedWeek.key)}
               previous={totals.get(win.weeks[selectedWeek.index - 1]?.key ?? "")}
+              restDays={Array.from({ length: 7 }, (_, d) => addDays(selectedWeek.key, d)).filter((k) => restDays.has(k)).length}
               current={totals.get(selectedWeek.key)!}
               unit={unit}
               timeZone={timeZone}
@@ -734,6 +761,7 @@ function WeekDetail({
   sessions,
   current,
   previous,
+  restDays,
   unit,
   timeZone,
   exerciseId,
@@ -742,6 +770,7 @@ function WeekDetail({
 }: {
   week: Window["weeks"][number];
   sessions: ExploreSession[];
+  restDays: number;
   current: { sessions: number; volume: number; records: number };
   previous?: { sessions: number; volume: number; records: number };
   unit: string;
@@ -766,6 +795,7 @@ function WeekDetail({
           { label: "Records", value: String(current.records) },
         ]}
       />
+      {restDays ? <p className="mt-3 text-[13px] text-ink-2">{plural(restDays, "rest day")}, shown as water on the map.</p> : null}
       {previous ? (
         <p className="num mt-3 text-[13px] text-ink-3">
           {previous.sessions === 0 && current.sessions === 0

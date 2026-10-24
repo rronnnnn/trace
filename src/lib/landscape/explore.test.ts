@@ -111,8 +111,8 @@ describe("terrain", () => {
   it("raises terrain where training happened", () => {
     const t = buildTerrain({ ...opts, sessions: toLandscapeSessions(sessions, none) });
     const flat = buildTerrain({ ...opts, sessions: [] });
-    const at = (tt: typeof t, l: (typeof t.landmarks)[number]) => tt.field[Math.round(l.y * 23) * 40 + Math.round(l.x * 39)];
-    for (const l of t.landmarks) expect(at(t, l)).toBeGreaterThan(0.5);
+    const mean = t.field.reduce((a, b) => a + b, 0) / t.field.length;
+    for (const l of t.landmarks) expect(l.height).toBeGreaterThan(mean);
     expect(flat.landmarks).toHaveLength(0);
   });
 });

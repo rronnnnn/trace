@@ -58,6 +58,17 @@ session sits above or below its ridge depending on its volume compared with that
 follows volume relative to your own training, and records (measured, never baselines or estimates) are landmarks.
 With an exercise selected, the terrain is rebuilt from that exercise's volume alone.
 
+Rendering (`src/lib/landscape/relief.ts`, `rest.ts`):
+- **Relief.** An elevation tint (low ground darkest, summits palest) is multiplied by hillshading lit from the
+  north-west. Ridged noise, scaled by how much training raised the ground, gives ranges crags and spurs. The relief is
+  a client-side raster of the same field the contours are traced from, so the two always agree.
+- **Water = rest.** Rest days are the days the plan leaves open with no session logged; missed training days are
+  never water. A river follows the cheapest path through the valleys, and each run of rest days is a lake on it
+  (single days are small pools, weekends larger lakes). Lakes are carved into the field, so contours wrap them.
+- **Vegetation** tints low, gentle ground and scatters sparse tree marks clear of the water.
+- **Colours** come from CSS tokens (`--terrain-*`, `--water*`, `--tree`). The relief redraws when the colour scheme
+  changes, ready for dark mode.
+
 - Filters: period (4 weeks to all time; refetches), workout, exercise. The selection lives in the URL
   (`?range=&workout=&exercise=&week=&session=`), so a view can be shared and survives a refresh.
 - Interactions: click or press Enter on a landmark to inspect its recorded sets and records (estimated 1RM is

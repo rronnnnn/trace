@@ -22,8 +22,19 @@
   --clay: #a4553c; /* destructive / warnings only */
   --clay-soft: #f3e2da;
 
-  --contour: #a9a495;
-  --contour-index: #6f6b61;
+  --contour: #8c8779;
+  --contour-index: #5e5a50;
+
+  /* Terrain (Training Landscape). Low ground darkest, summits palest: the record grows upward.
+     Dark mode overrides these tokens; the relief renderer reads them at draw time. */
+  --terrain-low: #9e9984;
+  --terrain-mid: #d9d4c3;
+  --terrain-high: #f7f5ef;
+  --terrain-vegetation: #b4bb9b;
+  --terrain-shade: 0.9;
+  --tree: #6f7d57;
+  --water: #b8cdd3;
+  --water-edge: #7f9ea8;
 
   --radius-sm: 4px;
   --radius: 6px;

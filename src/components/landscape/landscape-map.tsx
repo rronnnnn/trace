@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useId, useMemo, useState } from "react";
-import { contourLines, evenLevels } from "@/lib/landscape/contours";
+import { contourLines, evenLevels, resampleField } from "@/lib/landscape/contours";
+import { restSpans } from "@/lib/landscape/rest";
 import { buildTerrain, type LandscapeSession } from "@/lib/landscape/terrain";
-import { ContourLayer, MapTooltip, MarkerGlyph, markerLabel } from "./landscape-parts";
+import { ContourLayer, MapTooltip, MarkerGlyph, markerLabel, ReliefLayer, VegetationLayer, WaterLayer } from "./landscape-parts";
 import { cn } from "@/lib/utils";
 
 /**
@@ -24,6 +25,8 @@ export function LandscapeMap({
   className,
   label = "Training landscape",
   cover = false,
+  trainingDays = [],
+  timeZone = "UTC",
 }: {
   sessions: LandscapeSession[];
   seed: string;
@@ -38,20 +41,28 @@ export function LandscapeMap({
   label?: string;
   /** Fill the parent (cropping edges) instead of keeping the full map visible. */
   cover?: boolean;
+  trainingDays?: number[];
+  timeZone?: string;
 }) {
   const titleId = useId();
   const { terrain, lines } = useMemo(() => {
+    const s = new Date(start);
+    const e = new Date(end);
     const terrain = buildTerrain({
       sessions,
       seed,
-      start: new Date(start),
-      end: new Date(end),
-      cols: compact ? 90 : 130,
-      rows: compact ? 54 : 78,
+      start: s,
+      end: e,
+      cols: compact ? 130 : 190,
+      rows: Math.round((compact ? 130 : 190) * (height / width)),
       aspect: width / height,
+      rest: restSpans({ start: s, end: e, timeZone, trainingDays, sessionEndedAts: sessions.map((x) => x.endedAt) }),
     });
-    return { terrain, lines: contourLines(terrain.field, terrain.cols, terrain.rows, width, height, evenLevels(levels)) };
-  }, [sessions, seed, start, end, compact, width, height, levels]);
+    const cc = compact ? 84 : 120;
+    const cr = Math.round(cc * (height / width));
+    const coarse = resampleField(terrain.field, terrain.cols, terrain.rows, cc, cr);
+    return { terrain, lines: contourLines(coarse, cc, cr, width, height, evenLevels(levels)) };
+  }, [sessions, seed, start, end, compact, width, height, levels, timeZone, trainingDays]);
 
   const [active, setActive] = useState<string | null>(null);
   const activeMark = terrain.landmarks.find((l) => l.session.id === active);
@@ -66,7 +77,10 @@ export function LandscapeMap({
         aria-labelledby={titleId}
       >
         <title id={titleId}>{`${label}: ${sessions.length} session${sessions.length === 1 ? "" : "s"}`}</title>
+        <ReliefLayer terrain={terrain} width={width} height={height} />
         <ContourLayer lines={lines} />
+        <WaterLayer terrain={terrain} width={width} height={height} />
+        <VegetationLayer terrain={terrain} seed={seed} width={width} height={height} />
         {terrain.landmarks.map((l) => (
           <Link
             key={l.session.id}

@@ -1,7 +1,9 @@
 "use client";
 
-import type { ContourLine } from "@/lib/landscape/contours";
-import type { Landmark } from "@/lib/landscape/terrain";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { smoothPath, type ContourLine } from "@/lib/landscape/contours";
+import { lakeOutline, parseColor, shadeRelief, treePositions, type ReliefPalette } from "@/lib/landscape/relief";
+import type { Landmark, Terrain } from "@/lib/landscape/terrain";
 import { formatShortDate, formatVolume } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -113,6 +115,127 @@ export function MapTooltip({ mark, width, height, unit }: { mark: Landmark; widt
       <text x={x + 12} y={y + 32} fontSize={11} fill="var(--paper)" fillOpacity={0.7} style={{ fontVariantNumeric: "tabular-nums" }}>
         {sub}
       </text>
+    </g>
+  );
+}
+
+// ── relief, water, vegetation ────────────────────────────────────────────────
+
+const FALLBACK: ReliefPalette = {
+  low: [0x9e, 0x99, 0x84],
+  mid: [0xd9, 0xd4, 0xc3],
+  high: [0xf7, 0xf5, 0xef],
+  vegetation: [0xb4, 0xbb, 0x9b],
+  shade: 0.9,
+};
+
+function readPalette(): ReliefPalette {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name: string) => css.getPropertyValue(name);
+  const shade = Number.parseFloat(v("--terrain-shade"));
+  return {
+    low: parseColor(v("--terrain-low"), FALLBACK.low),
+    mid: parseColor(v("--terrain-mid"), FALLBACK.mid),
+    high: parseColor(v("--terrain-high"), FALLBACK.high),
+    vegetation: parseColor(v("--terrain-vegetation"), FALLBACK.vegetation),
+    shade: Number.isFinite(shade) ? shade : FALLBACK.shade,
+  };
+}
+
+/** Bumps when the colour scheme changes (system preference or a theme attribute on <html>). */
+function useThemeVersion() {
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setVersion((v) => v + 1);
+    const mq = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+    mq?.addEventListener("change", bump);
+    const mo = new MutationObserver(bump);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
+    return () => {
+      mq?.removeEventListener("change", bump);
+      mo.disconnect();
+    };
+  }, []);
+  return version;
+}
+
+/**
+ * Shaded relief raster under the contours. Drawn client-side from the same field the contours
+ * come from, so the two always agree; the SVG stretches it to the map's coordinate space.
+ */
+export function ReliefLayer({ terrain, width, height }: { terrain: Terrain; width: number; height: number }) {
+  const theme = useThemeVersion();
+  const ref = useRef<SVGImageElement>(null);
+  useEffect(() => {
+    const img = ref.current;
+    const canvas = document.createElement("canvas");
+    canvas.width = terrain.cols;
+    canvas.height = terrain.rows;
+    const ctx = canvas.getContext("2d");
+    if (!img || !ctx) return; // no canvas (e.g. test DOM): contours alone still render the map
+    const pixels = shadeRelief(terrain, readPalette());
+    ctx.putImageData(new ImageData(pixels, terrain.cols, terrain.rows), 0, 0);
+    img.setAttribute("href", canvas.toDataURL("image/png"));
+    img.style.opacity = "1";
+  }, [terrain, theme]);
+  return (
+    <image
+      ref={ref}
+      x={0}
+      y={0}
+      width={width}
+      height={height}
+      preserveAspectRatio="none"
+      aria-hidden
+      style={{ opacity: 0, imageRendering: "auto", transition: "opacity 400ms var(--ease-out)" }}
+    />
+  );
+}
+
+/** River and lakes. Each lake is a run of rest days; its tooltip says which. */
+export function WaterLayer({ terrain, width, height }: { terrain: Terrain; width: number; height: number }) {
+  const { river, lakes } = terrain.water;
+  const step = Math.max(1, Math.round(river.length / 70));
+  const riverD =
+    river.length > 2
+      ? smoothPath(river.filter((_, i) => i % step === 0 || i === river.length - 1).map(([x, y]) => [x * width, y * height]))
+      : "";
+  return (
+    <g aria-hidden>
+      {riverD ? (
+        <>
+          <path d={riverD} fill="none" stroke="var(--water)" strokeWidth={width / 230} strokeLinecap="round" strokeLinejoin="round" />
+          <path d={riverD} fill="none" stroke="var(--water-edge)" strokeWidth={width / 700} strokeLinecap="round" strokeOpacity={0.8} />
+        </>
+      ) : null}
+      {lakes.map((l) => {
+        const pts = lakeOutline(l).map(([x, y]) => [x * width, y * height] as [number, number]);
+        return (
+          <path
+            key={l.span.start}
+            d={smoothPath([...pts, pts[0]])}
+            fill="var(--water)"
+            stroke="var(--water-edge)"
+            strokeWidth={0.9}
+            vectorEffect="non-scaling-stroke"
+          >
+            <title>{l.span.label}</title>
+          </path>
+        );
+      })}
+    </g>
+  );
+}
+
+/** Sparse tree marks on the low, gentle ground. */
+export function VegetationLayer({ terrain, seed, width, height }: { terrain: Terrain; seed: string; width: number; height: number }) {
+  const trees = useMemo(() => treePositions(terrain, seed, 0.018, width / height), [terrain, seed, width, height]);
+  const r = width / 520;
+  return (
+    <g aria-hidden fill="var(--tree)" fillOpacity={0.5}>
+      {trees.map(([x, y], i) => (
+        <circle key={i} cx={x * width} cy={y * height} r={r} />
+      ))}
     </g>
   );
 }
