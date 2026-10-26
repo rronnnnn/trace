@@ -26,6 +26,8 @@ export type TerrainMesh = {
   /** the river's smoothed bed height at a normalised x, when the terrain has a river */
   riverBed: ((nx: number) => number) | null;
   heightScale: number;
+  /** final world heights per vertex (after carving), for tracing contours on the real surface */
+  heights: Float32Array;
 };
 
 const smoothstep = (a: number, b: number, x: number) => {
@@ -121,6 +123,20 @@ export function terrainMesh(
     }
   }
 
+  // The carve works column by column; one smoothing pass removes its stair-steps from diagonal
+  // reaches, while the channel keeps its depth (never raised above the carved bed).
+  if (bedProfile) {
+    const soft = smoothField(heights, cols, rows, 1);
+    for (let k = 0; k < heights.length; k++) {
+      const i = k % cols;
+      const j = (k - i) / cols;
+      if (i === 0 || j === 0 || i === cols - 1 || j === rows - 1) continue; // the rim stays on the ground
+      const h = Math.min(soft[k], heights[k] + (soft[k] - heights[k]) * (soft[k] > heights[k] ? 0.5 : 1));
+      heights[k] = h;
+      positions[k * 3 + 1] = h;
+    }
+  }
+
   const indices = new Uint32Array((cols - 1) * (rows - 1) * 6);
   let n = 0;
   for (let j = 0; j < rows - 1; j++) {
@@ -162,7 +178,7 @@ export function terrainMesh(
       }
     : null;
 
-  return { positions, colors, indices, cols, rows, heightAt, riverBed, heightScale };
+  return { positions, colors, indices, cols, rows, heightAt, riverBed, heightScale, heights };
 }
 
 /** Chaikin corner cutting: each pass rounds every corner; a few passes leave no edges at all. */
@@ -234,4 +250,70 @@ export function riverMesh(
 /** Normalised map point → world position on the surface. */
 export function toWorld(nx: number, ny: number, heightAt: (nx: number, ny: number) => number, lift = 0) {
   return [nx * SIZE_X, heightAt(nx, ny) + lift, ny * SIZE_Z] as [number, number, number];
+}
+
+/**
+ * Separable 1-2-1 smoothing of a height field. Softens procedural crag noise into sculpted
+ * slopes while keeping ridges and peaks (a few passes ≈ a small Gaussian, not a flattening).
+ */
+export function smoothField(field: Float32Array, cols: number, rows: number, passes = 2) {
+  let a = Float32Array.from(field);
+  let b = new Float32Array(a.length);
+  for (let p = 0; p < passes; p++) {
+    for (let j = 0; j < rows; j++)
+      for (let i = 0; i < cols; i++) {
+        const l = a[j * cols + Math.max(0, i - 1)];
+        const r = a[j * cols + Math.min(cols - 1, i + 1)];
+        b[j * cols + i] = (l + 2 * a[j * cols + i] + r) / 4;
+      }
+    [a, b] = [b, a];
+    for (let j = 0; j < rows; j++)
+      for (let i = 0; i < cols; i++) {
+        const u = a[Math.max(0, j - 1) * cols + i];
+        const d = a[Math.min(rows - 1, j + 1) * cols + i];
+        b[j * cols + i] = (u + 2 * a[j * cols + i] + d) / 4;
+      }
+    [a, b] = [b, a];
+  }
+  return a;
+}
+
+/**
+ * Which training region (routine) each vertex belongs to: the nearest session's routine, within
+ * a radius. Returns a region index per vertex (−1 for open ground) and the region keys.
+ */
+export function regionMap(
+  landmarks: { x: number; y: number; session: { templateKey: string } }[],
+  bands: string[],
+  cols: number,
+  rows: number,
+  aspect = SIZE_X / SIZE_Z,
+  radius = 0.07,
+) {
+  const out = new Float32Array(cols * rows).fill(-1);
+  const strength = new Float32Array(cols * rows);
+  const index = new Map(bands.map((b, i) => [b, i]));
+  const r2 = radius * radius;
+  for (let j = 0; j < rows; j++) {
+    const ny = j / (rows - 1);
+    for (let i = 0; i < cols; i++) {
+      const nx = i / (cols - 1);
+      let best = r2;
+      let region = -1;
+      for (const l of landmarks) {
+        const dx = (nx - l.x) * aspect;
+        const dy = ny - l.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < best) {
+          best = d2;
+          region = index.get(l.session.templateKey) ?? -1;
+        }
+      }
+      out[j * cols + i] = region;
+      // 1 near the sessions, easing to 0 at the region's edge: a feathered highlight
+      const t = 1 - Math.sqrt(best) / radius;
+      strength[j * cols + i] = region >= 0 ? t * t * (3 - 2 * t) : 0;
+    }
+  }
+  return Object.assign(out, { strength });
 }

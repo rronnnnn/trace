@@ -4,29 +4,44 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import * as THREE from "three";
 import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { contourChains, evenLevels, resampleField } from "@/lib/landscape/contours";
-import { edgeFalloff, riverMesh, SIZE_X, SIZE_Z, terrainMesh, toWorld, type MeshPalette } from "@/lib/landscape/mesh";
-import { parseColor, treePositions, type RGB } from "@/lib/landscape/relief";
+import type { RegionSummary } from "@/lib/landscape/explore";
+import {
+  edgeFalloff,
+  regionMap,
+  riverMesh,
+  SIZE_X,
+  SIZE_Z,
+  smoothField,
+  terrainMesh,
+  toWorld,
+  type MeshPalette,
+} from "@/lib/landscape/mesh";
+import { parseColor, type RGB } from "@/lib/landscape/relief";
 import type { RestSpan } from "@/lib/landscape/rest";
-import { hashString, type Landmark, type Terrain } from "@/lib/landscape/terrain";
-import { formatShortDate } from "@/lib/format";
+import type { Landmark, Terrain } from "@/lib/landscape/terrain";
+import { formatShortDate, formatVolume, plural } from "@/lib/format";
 
 export type Terrain3DHandle = { zoomIn: () => void; zoomOut: () => void; reset: () => void };
 
 type Props = {
   terrain: Terrain;
-  seed: string;
   timeZone: string;
+  unit: string;
   tilted: boolean;
   selectedId: string | null;
+  selectedRegion: string | null;
+  regions: RegionSummary[];
   theme: number;
   onSelectSession: (l: Landmark) => void;
+  onSelectRegion: (key: string) => void;
   onSelectRest: (span: RestSpan) => void;
   onClearSelection: () => void;
 };
 
-const TILT_POLAR = 0.98; // radians from straight down, for the 3D view
-const FLAT_POLAR = 0.0001;
-const HOME_DISTANCE = 92;
+const TILT_POLAR = 0.95; // radians from straight down, for the 3D view
+const HOME_DISTANCE = 96;
+const ORTHO_HEIGHT = 74; // world units visible top-to-bottom in 2D at zoom 1
+const CLOSE = 52; // camera distance under which every session shows
 
 /** CSS tokens are sRGB; three.js works in linear light, so convert on the way in. */
 function cssColor(name: string, fallback: RGB): THREE.Color {
@@ -45,130 +60,220 @@ function palette(): MeshPalette {
   };
 }
 
+/** Soft round glow for data points, drawn as screen-sized sprites. */
+const markerShader = {
+  vertexShader: /* glsl */ `
+    attribute float size;
+    attribute float alpha;
+    attribute vec3 tint;
+    varying float vAlpha;
+    varying vec3 vTint;
+    uniform float uPixelRatio;
+    void main() {
+      vAlpha = alpha;
+      vTint = tint;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = size * uPixelRatio;
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: /* glsl */ `
+    varying float vAlpha;
+    varying vec3 vTint;
+    void main() {
+      vec2 c = gl_PointCoord - 0.5;
+      float d = length(c) * 2.0;
+      if (d > 1.0) discard;
+      float core = smoothstep(0.42, 0.28, d);
+      float glow = (1.0 - d) * 0.55;
+      gl_FragColor = vec4(vTint, (core + glow * (1.0 - core)) * vAlpha);
+    }`,
+};
+
 /**
- * The Training Landscape as a real 3D scene: lit terrain mesh with shadows, draped contours,
- * a water surface for the river, instanced trees and standing pins for sessions. Labels are
- * HTML projected from 3D each frame, so text stays sharp at any zoom.
+ * The Training Landscape as a sculpted 3D scene: smoothed terrain with soft light, fine draped
+ * contours, a muted river in its valley, and quiet data points (records in sage; other
+ * sessions appear up close or with their region). 2D is a true orthographic, flat map of the
+ * same scene. Labels are HTML projected from 3D, so text stays sharp at any zoom.
  */
 export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
-  { terrain, seed, timeZone, tilted, selectedId, theme, onSelectSession, onSelectRest, onClearSelection },
+  {
+    terrain,
+    timeZone,
+    unit,
+    tilted,
+    selectedId,
+    selectedRegion,
+    regions,
+    theme,
+    onSelectSession,
+    onSelectRegion,
+    onSelectRest,
+    onClearSelection,
+  },
   ref,
 ) {
   const host = useRef<HTMLDivElement>(null);
   const labelsHost = useRef<HTMLDivElement>(null);
-  const api = useRef<{
-    camera: THREE.PerspectiveCamera;
-    controls: MapControls;
-    invalidate: () => void;
-    flyTo: (polar: number, distance: number, target?: THREE.Vector3) => void;
+  const tip = useRef<HTMLDivElement>(null);
+  type Api = {
+    setMode: (tilted: boolean) => void;
     setSelected: (id: string | null) => void;
-  } | null>(null);
-  const callbacks = useRef({ onSelectSession, onSelectRest, onClearSelection });
+    setRegion: (key: string | null) => void;
+    zoom: (factor: number) => void;
+    reset: () => void;
+  };
+  const api = useRef<Api | null>(null);
+  const callbacks = useRef({ onSelectSession, onSelectRegion, onSelectRest, onClearSelection });
   useEffect(() => {
-    callbacks.current = { onSelectSession, onSelectRest, onClearSelection };
-  }, [onSelectSession, onSelectRest, onClearSelection]);
+    callbacks.current = { onSelectSession, onSelectRegion, onSelectRest, onClearSelection };
+  }, [onSelectSession, onSelectRegion, onSelectRest, onClearSelection]);
+  const initial = useRef({ tilted, selectedId, selectedRegion });
+  useEffect(() => {
+    initial.current = { tilted, selectedId, selectedRegion };
+  }, [tilted, selectedId, selectedRegion]);
 
-  // ── build the scene (once per terrain / theme) ─────────────────────────────
   useEffect(() => {
     const el = host.current;
     const labelEl = labelsHost.current;
-    if (!el || !labelEl) return;
+    const tipEl = tip.current;
+    if (!el || !labelEl || !tipEl) return;
+    const root = document.documentElement;
+    const dark = root.dataset.theme === "dark" || (!root.dataset.theme && window.matchMedia?.("(prefers-color-scheme: dark)").matches);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    renderer.setPixelRatio(dpr);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.VSMShadowMap; // soft, blurred shadows rather than hard black patches
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
+    renderer.toneMappingExposure = 1.22;
     renderer.domElement.style.display = "block";
     renderer.domElement.style.touchAction = "none";
     el.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
     const paper = cssColor("--paper", [244, 241, 234]);
-    scene.fog = new THREE.Fog(paper, 120, 260);
+    scene.fog = new THREE.Fog(paper, 130, 280);
+    const sage = cssColor("--sage", [93, 111, 80]);
 
-    const camera = new THREE.PerspectiveCamera(42, 1, 0.5, 800);
+    // soft, mostly ambient light; one low-intensity key from the north-west reveals the form
+    scene.add(new THREE.HemisphereLight(dark ? 0xb4bcc4 : 0xffffff, dark ? 0x1a1d1a : 0x8f8774, dark ? 2.3 : 1.7));
     const centre = new THREE.Vector3(SIZE_X / 2, 0, SIZE_Z / 2);
-
-    // light from the north-west, the cartographic convention
-    const dark =
-      document.documentElement.dataset.theme === "dark" ||
-      (!document.documentElement.dataset.theme && window.matchMedia?.("(prefers-color-scheme: dark)").matches);
-    scene.add(new THREE.HemisphereLight(dark ? 0xa9b2bd : 0xffffff, dark ? 0x1c1f1c : 0x8a826e, dark ? 1.9 : 1.4));
-    const sun = new THREE.DirectionalLight(0xffffff, dark ? 2.6 : 2.3);
-    sun.position.set(-40, 70, -30);
+    const sun = new THREE.DirectionalLight(0xffffff, dark ? 1.5 : 1.6);
+    sun.position.set(-45, 60, -35);
     sun.target.position.copy(centre);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(1536, 1536);
-    sun.shadow.camera.left = -70;
-    sun.shadow.camera.right = 70;
-    sun.shadow.camera.top = 60;
-    sun.shadow.camera.bottom = -60;
-    sun.shadow.bias = -0.0008;
-    sun.shadow.normalBias = 0.05;
+    sun.shadow.mapSize.set(1024, 1024);
+    Object.assign(sun.shadow.camera, { left: -70, right: 70, top: 60, bottom: -60 });
+    sun.shadow.radius = 7;
+    sun.shadow.blurSamples = 12;
+    sun.shadow.bias = -0.0006;
+    sun.shadow.intensity = 0.55; // shadows suggest form, never black out a slope
     scene.add(sun, sun.target);
 
-    // terrain
-    const pal = palette();
-    const mesh = terrainMesh(terrain, pal, 16, 1.7);
-    // vertex colours arrive as sRGB 0–1; linearise them like every other colour in the scene
-    // ...and fade the terrain out at its borders (opacity, not colour: lighting would shift a
-    // colour match), so the page shows through and the map has no edge at all
+    // everything that has height lives in one group, so 2D can flatten it into a true map
+    const world = new THREE.Group();
+    scene.add(world);
+
+    // ── terrain ───────────────────────────────────────────────────────────
+    const smooth = { ...terrain, field: smoothField(terrain.field, terrain.cols, terrain.rows, 4) };
+    const mesh = terrainMesh(smooth, palette(), 15, 1.7);
     const tmp = new THREE.Color();
     const rgba = new Float32Array((mesh.colors.length / 3) * 4);
     for (let v = 0; v < mesh.colors.length / 3; v++) {
       const k = v * 3;
       tmp.setRGB(mesh.colors[k], mesh.colors[k + 1], mesh.colors[k + 2], THREE.SRGBColorSpace);
-      const f = edgeFalloff((v % mesh.cols) / (mesh.cols - 1), Math.floor(v / mesh.cols) / (mesh.rows - 1), 0.16);
-      rgba.set([tmp.r, tmp.g, tmp.b, f * f], v * 4);
+      // fade to transparent at the borders: the page shows through, the map has no edge
+      const f = edgeFalloff((v % mesh.cols) / (mesh.cols - 1), Math.floor(v / mesh.cols) / (mesh.rows - 1), 0.22);
+      rgba.set([tmp.r, tmp.g, tmp.b, f * f * f], v * 4);
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(rgba, 4));
+    const regions3d = regionMap(terrain.landmarks, terrain.bands, mesh.cols, mesh.rows);
+    geo.setAttribute("region", new THREE.BufferAttribute(regions3d, 1));
+    geo.setAttribute("regionStrength", new THREE.BufferAttribute(regions3d.strength, 1));
     geo.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
     geo.computeVertexNormals();
-    const ground = new THREE.Mesh(
-      geo,
-      new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, roughness: 0.96, metalness: 0 }),
-    );
+
+    const regionUniforms = { uHover: { value: -1 }, uSelected: { value: -1 }, uSage: { value: sage } };
+    const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, roughness: 0.84, metalness: 0 });
+    terrainMat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, regionUniforms);
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          "#include <common>",
+          "#include <common>\nattribute float region;\nattribute float regionStrength;\nvarying float vRegion;\nvarying float vStrength;",
+        )
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvRegion = region;\nvStrength = regionStrength;");
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          "#include <common>",
+          "#include <common>\nvarying float vRegion;\nvarying float vStrength;\nuniform float uHover;\nuniform float uSelected;\nuniform vec3 uSage;",
+        )
+        .replace(
+          "#include <dithering_fragment>",
+          `#include <dithering_fragment>
+           float lit = (uHover >= 0.0 && abs(vRegion - uHover) < 0.5 ? 0.55 : 0.0) + (uSelected >= 0.0 && abs(vRegion - uSelected) < 0.5 ? 1.0 : 0.0);
+           gl_FragColor.rgb += uSage * 0.3 * min(lit, 1.0) * vStrength;`,
+        );
+    };
+    const ground = new THREE.Mesh(geo, terrainMat);
     ground.castShadow = true;
     ground.receiveShadow = true;
-    scene.add(ground);
+    world.add(ground);
 
-    // the ground beyond the map is the page itself: invisible except for the shadows cast on it
-    const plain = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.ShadowMaterial({ opacity: dark ? 0.45 : 0.18 }));
+    // beyond the map: only the shadows reach the page
+    const plain = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.ShadowMaterial({ opacity: dark ? 0.35 : 0.14 }));
     plain.rotation.x = -Math.PI / 2;
     plain.position.set(centre.x, -0.02, centre.z);
     plain.receiveShadow = true;
     scene.add(plain);
 
-    // draped contours (every third level), subtle: the 3D form does the work now
-    const cc = 180;
+    // ── contours: fine, many, sage-tinted; every fifth a little stronger ──────
+    const cc = 200;
     const cr = Math.round((cc * SIZE_Z) / SIZE_X);
-    const coarse = resampleField(terrain.field, terrain.cols, terrain.rows, cc, cr);
-    const lines: number[] = [];
-    for (const c of contourChains(coarse, cc, cr, 1, 1, evenLevels(18)).filter((_, i) => i % 2 === 1)) {
-      for (const chain of c.chains) {
+    // traced from the final surface (after the river's carve), so lines follow what you see
+    const surface = mesh.heights.map((h) => h / mesh.heightScale);
+    const contourField = resampleField(surface, mesh.cols, mesh.rows, cc, cr);
+    // lines fade out with the terrain toward the rim (per-vertex alpha), never a hard cut
+    const contourColor = cssColor("--contour-index", [94, 90, 80]).lerp(sage, 0.55);
+    const lineSet = (opacity: number) => ({ pos: [] as number[], col: [] as number[], opacity });
+    const fine = lineSet(dark ? 0.2 : 0.2);
+    const index = lineSet(dark ? 0.4 : 0.36);
+    for (const c of contourChains(contourField, cc, cr, 1, 1, evenLevels(40, 0.02, 0.95), 5)) {
+      const set = c.index ? index : fine;
+      for (const chain of c.chains)
         for (let i = 0; i < chain.length - 1; i++) {
-          if (edgeFalloff(chain[i][0], chain[i][1], 0.16) < 0.6) continue; // none in the faded rim
-          const a = toWorld(chain[i][0], chain[i][1], mesh.heightAt, 0.06);
-          const b = toWorld(chain[i + 1][0], chain[i + 1][1], mesh.heightAt, 0.06);
-          lines.push(...a, ...b);
+          const a = edgeFalloff(chain[i][0], chain[i][1], 0.22);
+          const b = edgeFalloff(chain[i + 1][0], chain[i + 1][1], 0.22);
+          if (a + b < 0.02) continue;
+          set.pos.push(
+            ...toWorld(chain[i][0], chain[i][1], mesh.heightAt, 0.05),
+            ...toWorld(chain[i + 1][0], chain[i + 1][1], mesh.heightAt, 0.05),
+          );
+          set.col.push(
+            contourColor.r,
+            contourColor.g,
+            contourColor.b,
+            a * a * set.opacity,
+            contourColor.r,
+            contourColor.g,
+            contourColor.b,
+            b * b * set.opacity,
+          );
         }
-      }
     }
-    const contourGeo = new THREE.BufferGeometry();
-    contourGeo.setAttribute("position", new THREE.Float32BufferAttribute(lines, 3));
-    const contours = new THREE.LineSegments(
-      contourGeo,
-      new THREE.LineBasicMaterial({ color: cssColor("--contour-index", [94, 90, 80]), transparent: true, opacity: dark ? 0.32 : 0.28 }),
-    );
-    scene.add(contours);
+    for (const set of [fine, index]) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(set.pos, 3));
+      g.setAttribute("color", new THREE.Float32BufferAttribute(set.col, 4));
+      world.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false })));
+    }
 
-    // river: a still water surface in the valley
-    const river = riverMesh(terrain.water.river, mesh.heightAt, 0.3, 1.7, mesh.riverBed);
+    // ── river: muted, matte, with a faint bank line ─────────────────────────
+    const river = riverMesh(terrain.water.river, mesh.heightAt, 0.3, 1.5, mesh.riverBed);
     let water: THREE.Mesh | null = null;
     if (river) {
       const wg = new THREE.BufferGeometry();
@@ -179,170 +284,300 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         wg,
         new THREE.MeshStandardMaterial({
           color: cssColor("--water", [184, 205, 211]),
-          emissive: cssColor("--water-edge", [127, 158, 168]),
-          emissiveIntensity: dark ? 0.12 : 0.1,
-          roughness: 0.18,
-          metalness: 0.1,
-          transparent: true,
-          opacity: 0.94,
+          emissive: cssColor("--water", [184, 205, 211]),
+          emissiveIntensity: dark ? 0.22 : 0.06,
+          roughness: 0.5,
+          metalness: 0,
           side: THREE.DoubleSide,
         }),
       );
       water.receiveShadow = true;
-      scene.add(water);
+      world.add(water);
+      // banks: the two outer edges of the strip, drawn as thin lines for a quiet separation
+      const banks: number[] = [];
+      const p = river.positions;
+      for (let i = 0; i < p.length / 6 - 1; i++)
+        for (const side of [0, 3])
+          banks.push(
+            p[i * 6 + side],
+            p[i * 6 + side + 1] + 0.02,
+            p[i * 6 + side + 2],
+            p[(i + 1) * 6 + side],
+            p[(i + 1) * 6 + side + 1] + 0.02,
+            p[(i + 1) * 6 + side + 2],
+          );
+      const bg = new THREE.BufferGeometry();
+      bg.setAttribute("position", new THREE.Float32BufferAttribute(banks, 3));
+      world.add(
+        new THREE.LineSegments(
+          bg,
+          new THREE.LineBasicMaterial({ color: cssColor("--water-edge", [127, 158, 168]), transparent: true, opacity: 0.55 }),
+        ),
+      );
     }
 
-    // trees: instanced low-poly conifers on the low, gentle ground
-    const trees = treePositions(terrain, seed, 0.016, SIZE_X / SIZE_Z).filter(([x, y]) => edgeFalloff(x, y, 0.16) > 0.7);
-    const treeGeo = new THREE.ConeGeometry(0.3, 1.05, 6);
-    treeGeo.translate(0, 0.52, 0);
-    const forest = new THREE.InstancedMesh(
-      treeGeo,
-      new THREE.MeshStandardMaterial({ color: cssColor("--tree", [111, 125, 87]), roughness: 0.9, flatShading: true }),
-      trees.length,
-    );
-    const m4 = new THREE.Matrix4();
-    trees.forEach(([x, y], i) => {
-      const s = 0.65 + ((hashString(`${seed}${i}`) % 100) / 100) * 0.6;
-      const p = toWorld(x, y, mesh.heightAt);
-      m4.compose(new THREE.Vector3(...p), new THREE.Quaternion(), new THREE.Vector3(s, s * (0.9 + (i % 3) * 0.15), s));
-      forest.setMatrixAt(i, m4);
-    });
-    forest.castShadow = true;
-    scene.add(forest);
-
-    // pins: a thin stem and a head standing on the terrain; records in sage
+    // ── data points ─────────────────────────────────────────────────────────
     const marks = terrain.landmarks;
-    const stemGeo = new THREE.CylinderGeometry(0.06, 0.06, 2.2, 6);
-    stemGeo.translate(0, 1.1, 0);
-    const headGeo = new THREE.SphereGeometry(0.55, 16, 12);
-    const stems = new THREE.InstancedMesh(
-      stemGeo,
-      new THREE.MeshStandardMaterial({ color: cssColor("--ink-3", [106, 103, 95]) }),
-      marks.length,
+    const regionOf = new Map(terrain.bands.map((b, i) => [b, i]));
+    const base = marks.map((l) => new THREE.Vector3(...toWorld(l.x, l.y, mesh.heightAt, 0.35)));
+    const pg = new THREE.BufferGeometry();
+    pg.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(
+        base.flatMap((v) => [v.x, v.y, v.z]),
+        3,
+      ),
     );
-    const heads = new THREE.InstancedMesh(headGeo, new THREE.MeshStandardMaterial({ roughness: 0.4 }), marks.length);
-    // ink contrasts with the terrain in both themes (dark pins on pale ground, light on dark)
-    const sessionColor = cssColor("--ink", [29, 28, 26]);
-    const recordColor = cssColor("--sage", [93, 111, 80]);
-    const pinBase: THREE.Vector3[] = [];
-    marks.forEach((l, i) => {
-      const p = new THREE.Vector3(...toWorld(l.x, l.y, mesh.heightAt));
-      pinBase.push(p);
-      m4.makeTranslation(p.x, p.y, p.z);
-      stems.setMatrixAt(i, m4);
-      m4.makeTranslation(p.x, p.y + 2.4, p.z);
-      heads.setMatrixAt(i, m4);
-      heads.setColorAt(i, l.session.prCount > 0 ? recordColor : sessionColor);
-    });
-    stems.castShadow = true;
-    heads.castShadow = true;
-    scene.add(stems, heads);
-
-    // selection ring around the chosen pin's foot
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(1.1, 0.09, 8, 48),
-      new THREE.MeshBasicMaterial({ color: cssColor("--ink", [29, 28, 26]) }),
+    const sizes = new Float32Array(marks.length);
+    const alphas = new Float32Array(marks.length);
+    const tints = new Float32Array(marks.length * 3);
+    const sessionTint = cssColor("--ink-2", [85, 82, 75]);
+    marks.forEach((l, i) => (l.session.prCount > 0 ? sage : sessionTint).toArray(tints, i * 3));
+    pg.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
+    pg.setAttribute("alpha", new THREE.BufferAttribute(alphas, 1));
+    pg.setAttribute("tint", new THREE.BufferAttribute(tints, 3));
+    const points = new THREE.Points(
+      pg,
+      new THREE.ShaderMaterial({ ...markerShader, uniforms: { uPixelRatio: { value: dpr } }, transparent: true, depthWrite: false }),
     );
-    ring.rotation.x = -Math.PI / 2;
-    ring.visible = false;
-    scene.add(ring);
+    points.renderOrder = 5;
+    world.add(points);
 
-    // ── camera & controls ───────────────────────────────────────────────────
-    const controls = new MapControls(camera, renderer.domElement);
-    controls.target.copy(centre);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.09;
-    controls.screenSpacePanning = false;
-    controls.minDistance = 14;
-    controls.maxDistance = 170;
-    controls.zoomToCursor = true;
-    controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+    // selection: a soft halo and a thin leader line rising from the point
+    const haloGeo = new THREE.BufferGeometry();
+    haloGeo.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0], 3));
+    haloGeo.setAttribute("size", new THREE.Float32BufferAttribute([34], 1));
+    haloGeo.setAttribute("alpha", new THREE.Float32BufferAttribute([0.55], 1));
+    haloGeo.setAttribute("tint", new THREE.Float32BufferAttribute(sage.toArray(), 3));
+    const halo = new THREE.Points(
+      haloGeo,
+      new THREE.ShaderMaterial({ ...markerShader, uniforms: { uPixelRatio: { value: dpr } }, transparent: true, depthWrite: false }),
+    );
+    halo.visible = false;
+    halo.renderOrder = 4;
+    const leader = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 7, 0)]),
+      new THREE.LineBasicMaterial({ color: sage, transparent: true, opacity: 0.8 }),
+    );
+    leader.visible = false;
+    world.add(halo, leader);
 
-    const place = (polar: number, distance: number, azimuth = 0) => {
-      const offset = new THREE.Vector3().setFromSphericalCoords(distance, polar, azimuth);
-      camera.position.copy(controls.target).add(offset);
-      camera.lookAt(controls.target);
+    // ── cameras & controls (perspective for 3D, orthographic for the flat 2D map) ─
+    const persp = new THREE.PerspectiveCamera(40, 1, 0.5, 900);
+    const ortho = new THREE.OrthographicCamera(-50, 50, 37, -37, 0.1, 1000);
+    ortho.up.set(0, 0, -1); // north up
+    let camera: THREE.Camera = persp;
+    let controls: MapControls | null = null;
+    const target = centre.clone();
+
+    let dirty = true;
+    const invalidate = () => {
+      dirty = true;
     };
-    place(tilted ? TILT_POLAR : FLAT_POLAR, HOME_DISTANCE);
-    const lockPolar = (polar: number | null) => {
-      controls.minPolarAngle = polar ?? 0;
-      controls.maxPolarAngle = polar ?? 1.32;
-      controls.enableRotate = polar == null;
-    };
-    lockPolar(tilted ? null : FLAT_POLAR);
-
-    // keep the camera over the map
-    controls.addEventListener("change", () => {
-      const t = controls.target;
-      const cx = Math.min(SIZE_X + 10, Math.max(-10, t.x));
-      const cz = Math.min(SIZE_Z + 10, Math.max(-10, t.z));
-      if (cx !== t.x || cz !== t.z) {
-        camera.position.x += cx - t.x;
-        camera.position.z += cz - t.z;
-        t.set(cx, 0, cz);
+    const clampTarget = (c: MapControls) => {
+      const x = Math.min(SIZE_X + 6, Math.max(-6, c.target.x));
+      const z = Math.min(SIZE_Z + 6, Math.max(-6, c.target.z));
+      if (x !== c.target.x || z !== c.target.z) {
+        camera.position.x += x - c.target.x;
+        camera.position.z += z - c.target.z;
+        c.target.set(x, 0, z);
       }
-    });
-
-    // ── labels (HTML, projected) ────────────────────────────────────────────
-    type Label = { el: HTMLDivElement; pos: THREE.Vector3; minZoom: number; maxDistance?: number };
-    const labels: Label[] = [];
-    const addLabel = (text: string, pos: THREE.Vector3, className: string, maxDistance?: number) => {
-      const d = document.createElement("div");
-      d.textContent = text;
-      d.className = className;
-      d.style.position = "absolute";
-      d.style.left = "0";
-      d.style.top = "0";
-      d.style.willChange = "transform";
-      labelEl.appendChild(d);
-      labels.push({ el: d, pos, minZoom: 0, maxDistance });
+      target.copy(c.target);
     };
-    const rangeClass =
-      "pointer-events-none whitespace-nowrap text-[11px] sm:text-[12px] font-medium tracking-[0.04em] text-ink [text-shadow:0_0_6px_var(--paper),0_0_2px_var(--paper)]";
+    const makeControls = (cam: THREE.Camera, is3D: boolean) => {
+      const c = new MapControls(cam, renderer.domElement);
+      c.target.copy(target);
+      c.enableDamping = true;
+      c.dampingFactor = 0.09;
+      c.screenSpacePanning = !is3D;
+      c.zoomToCursor = true;
+      c.enableRotate = is3D;
+      c.minDistance = 14;
+      c.maxDistance = 180;
+      c.minZoom = 0.7;
+      c.maxZoom = 7;
+      c.maxPolarAngle = 1.3;
+      c.touches = { ONE: THREE.TOUCH.PAN, TWO: is3D ? THREE.TOUCH.DOLLY_ROTATE : THREE.TOUCH.DOLLY_PAN };
+      c.addEventListener("change", () => {
+        clampTarget(c);
+        invalidate();
+      });
+      return c;
+    };
+
+    // flatten / raise the world between modes
+    let flat = 0; // 0 = full height, 1 = flat map
+    let flatTarget = 0;
+    const applyFlat = () => {
+      world.scale.y = 1 - 0.995 * flat;
+      sun.castShadow = flat < 0.5;
+      plain.visible = flat < 0.5;
+    };
+
+    const setMode = (is3D: boolean) => {
+      controls?.dispose();
+      if (is3D) {
+        camera = persp;
+        persp.position
+          .copy(target)
+          .add(new THREE.Vector3().setFromSphericalCoords(HOME_DISTANCE / Math.max(0.7, ortho.zoom), TILT_POLAR, 0));
+        persp.lookAt(target);
+      } else {
+        camera = ortho;
+        ortho.position.set(target.x, 300, target.z);
+        ortho.lookAt(target);
+      }
+      controls = makeControls(camera, is3D);
+      flatTarget = is3D ? 0 : 1;
+      invalidate();
+    };
+    const ctl = () => controls!;
+
+    // ── labels: region callouts, the selected session, and rest at close range ─
+    type Label = { el: HTMLElement; pos: THREE.Vector3; show: () => boolean; region?: string };
+    const labels: Label[] = [];
+    const addLabel = (node: HTMLElement, pos: THREE.Vector3, show: () => boolean, region?: string) => {
+      node.style.position = "absolute";
+      node.style.left = "0";
+      node.style.top = "0";
+      node.style.willChange = "transform, opacity";
+      node.style.transition = "opacity 160ms ease-out";
+      labelEl.appendChild(node);
+      labels.push({ el: node, pos, show, region });
+    };
+    const distance = () => (camera === persp ? persp.position.distanceTo(ctl().target) : 100 / ortho.zoom);
+
+    let hoverRegion = -1;
+    let selectedRegionIndex = -1;
+    let selectedIndex = -1;
+
+    // which points show: records always (quietly); sessions up close, or with their region
+    const refreshPoints = () => {
+      const close = distance() < CLOSE;
+      marks.forEach((l, i) => {
+        const region = regionOf.get(l.session.templateKey) ?? -1;
+        const active = region === hoverRegion || region === selectedRegionIndex;
+        const record = l.session.prCount > 0;
+        const selected = i === selectedIndex;
+        alphas[i] = selected ? 1 : record ? 1 : close || active ? 0.8 : 0;
+        sizes[i] = selected ? 14 : record ? (active ? 13 : 11) : 7;
+      });
+      pg.attributes.alpha.needsUpdate = true;
+      pg.attributes.size.needsUpdate = true;
+      invalidate();
+    };
+    const setHoverRegion = (region: number) => {
+      if (region === hoverRegion) return;
+      hoverRegion = region;
+      regionUniforms.uHover.value = region;
+      refreshPoints();
+    };
+
     for (const band of terrain.bands) {
       const ls = marks.filter((l) => l.session.templateKey === band);
       if (!ls.length) continue;
-      const mid = ls.reduce((best, l) => (Math.abs(l.u - 0.5) < Math.abs(best.u - 0.5) ? l : best), ls[0]);
-      addLabel(mid.session.label, new THREE.Vector3(...toWorld(mid.x, mid.y, mesh.heightAt, 5.2)), rangeClass);
+      const top = ls.reduce((best, l) => (l.height > best.height ? l : best), ls[0]);
+      const summary = regions.find((r) => r.key === band);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "group flex items-stretch gap-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-[var(--sage)]";
+      const line = document.createElement("span");
+      line.className =
+        "h-9 w-px shrink-0 bg-[var(--ink-3)] opacity-70 transition-colors group-hover:bg-[var(--sage)] group-data-[active=true]:bg-[var(--sage)] group-data-[active=true]:opacity-100";
+      const text = document.createElement("span");
+      text.className = "pb-0.5";
+      const title = document.createElement("span");
+      title.className = "block whitespace-nowrap text-[12px] font-medium leading-tight text-ink sm:text-[13px]";
+      title.textContent = top.session.label;
+      const stat = document.createElement("span");
+      stat.className = "num block whitespace-nowrap text-[11px] leading-tight text-ink-3";
+      stat.textContent = summary ? `${plural(summary.workouts, "workout")} · ${plural(summary.records, "PR")}` : "";
+      text.append(title, stat);
+      btn.append(line, text);
+      btn.setAttribute("aria-label", `${top.session.label}: ${stat.textContent}`);
+      btn.style.textShadow = "0 0 8px var(--paper), 0 0 3px var(--paper)";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        callbacks.current.onSelectRegion(band);
+      });
+      btn.addEventListener("pointerenter", () => setHoverRegion(regionOf.get(band) ?? -1));
+      btn.addEventListener("pointerleave", () => setHoverRegion(-1));
+      addLabel(btn, new THREE.Vector3(...toWorld(top.x, top.y, mesh.heightAt, 2.2)), () => true, band);
     }
-    const smallClass =
-      "pointer-events-none whitespace-nowrap text-[10.5px] text-ink-2 num [text-shadow:0_0_5px_var(--paper),0_0_2px_var(--paper)]";
-    marks.forEach((l, i) =>
-      addLabel(formatShortDate(l.session.endedAt, timeZone), pinBase[i].clone().add(new THREE.Vector3(0, 3.6, 0)), smallClass, 42),
-    );
-    const waterClass =
-      "pointer-events-none whitespace-nowrap text-[10.5px] italic text-[var(--water-edge)] [text-shadow:0_0_5px_var(--paper)]";
+
+    const selectedLabel = document.createElement("div");
+    selectedLabel.className =
+      "pointer-events-none whitespace-nowrap rounded-md bg-[var(--surface)] px-2 py-1 text-[11px] text-ink shadow-[var(--shadow)]";
+    const selectedPos = new THREE.Vector3();
+    addLabel(selectedLabel, selectedPos, () => selectedIndex >= 0);
+
     for (const lake of terrain.water.lakes) {
       if (lake.span.days < 2) continue;
-      addLabel(`${lake.span.days} days rest`, new THREE.Vector3(...toWorld(lake.x, lake.y, mesh.heightAt, 0.8)), waterClass, 60);
+      const d = document.createElement("div");
+      d.textContent = `${lake.span.days} days rest`;
+      d.className = "pointer-events-none whitespace-nowrap text-[10.5px] italic text-[var(--water-edge)]";
+      d.style.textShadow = "0 0 5px var(--paper)";
+      addLabel(d, new THREE.Vector3(...toWorld(lake.x, lake.y, mesh.heightAt, 0.9)), () => distance() < CLOSE + 10);
     }
 
     const v = new THREE.Vector3();
     const updateLabels = () => {
       const w = el.clientWidth;
       const h = el.clientHeight;
-      const dist = camera.position.distanceTo(controls.target);
+      const placed: DOMRect[] = [];
       for (const l of labels) {
-        v.copy(l.pos).project(camera);
-        const visible = v.z < 1 && Math.abs(v.x) < 1.1 && Math.abs(v.y) < 1.1 && (l.maxDistance == null || dist < l.maxDistance);
+        v.copy(l.pos);
+        v.y *= world.scale.y;
+        v.project(camera);
+        const visible = v.z < 1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05 && l.show();
         l.el.style.opacity = visible ? "1" : "0";
-        if (visible) l.el.style.transform = `translate(${((v.x + 1) / 2) * w}px, ${((1 - v.y) / 2) * h}px) translate(-50%, -100%)`;
+        l.el.style.pointerEvents = visible && l.region ? "auto" : "none";
+        if (!visible) continue;
+        let x = ((v.x + 1) / 2) * w;
+        let y = ((1 - v.y) / 2) * h;
+        if (l.region) {
+          // callouts stand on their summit; nudge up past any callout they would overlap,
+          // and stay inside the screen (narrow phones especially)
+          const bw = l.el.offsetWidth || 120;
+          const bh = l.el.offsetHeight || 36;
+          x = Math.min(Math.max(8, x), w - bw - 8);
+          y = Math.max(bh + 56, y);
+          const overlaps = (r: DOMRect) =>
+            placed.some((p) => !(r.right < p.left || r.left > p.right || r.bottom < p.top || r.top > p.bottom));
+          let rect = new DOMRect(x, y - bh, bw, bh);
+          for (let tries = 0; tries < 4 && overlaps(rect); tries++) {
+            y -= bh + 4;
+            rect = new DOMRect(x, y - bh, bw, bh);
+          }
+          placed.push(rect);
+          l.el.style.transform = `translate(${x}px, ${y}px) translate(0, -100%)`;
+          const r = regionOf.get(l.region);
+          l.el.dataset.active = String(r === selectedRegionIndex || r === hoverRegion);
+        } else {
+          l.el.style.transform = `translate(${Math.round(x)}px, ${y}px) translate(-50%, -100%)`;
+        }
       }
     };
 
     // ── render on demand ────────────────────────────────────────────────────
-    let dirty = true;
-    const invalidate = () => {
-      dirty = true;
-    };
-    controls.addEventListener("change", invalidate);
+    let lastClose = false;
     let raf = 0;
     let fly: ((now: number) => boolean) | null = null;
     const tick = (now: number) => {
       const flying = fly ? fly(now) : false;
       if (!flying) fly = null;
-      const moved = controls.update();
+      if (Math.abs(flat - flatTarget) > 0.001) {
+        flat += (flatTarget - flat) * 0.18;
+        if (Math.abs(flat - flatTarget) < 0.002) flat = flatTarget;
+        applyFlat();
+        dirty = true;
+      }
+      const moved = ctl().update();
+      const close = distance() < CLOSE;
+      if (close !== lastClose) {
+        lastClose = close;
+        refreshPoints();
+      }
       if (moved || dirty || flying) {
         renderer.render(scene, camera);
         updateLabels();
@@ -350,7 +585,6 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       }
       raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
 
     const resize = () => {
       const w = el.clientWidth || 1;
@@ -358,40 +592,136 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       renderer.setSize(w, h, false);
       renderer.domElement.style.width = `${w}px`;
       renderer.domElement.style.height = `${h}px`;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
+      persp.aspect = w / h;
+      persp.updateProjectionMatrix();
+      const halfH = ORTHO_HEIGHT / 2;
+      Object.assign(ortho, { left: -halfH * (w / h), right: halfH * (w / h), top: halfH, bottom: -halfH });
+      ortho.updateProjectionMatrix();
       invalidate();
     };
-    const ro = new ResizeObserver(resize);
-    ro.observe(el);
-    resize();
 
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const flyTo = (polar: number, distance: number, target?: THREE.Vector3) => {
-      const fromTarget = controls.target.clone();
-      const toTarget = target ?? fromTarget.clone();
-      const off = camera.position.clone().sub(controls.target);
-      const sph = new THREE.Spherical().setFromVector3(off);
-      const from = { polar: sph.phi, dist: sph.radius, az: sph.theta };
-      const to = { polar, dist: distance, az: polar === FLAT_POLAR ? 0 : from.az };
+    const animate = (step: (e: number) => void, dur = 480) => {
       const t0 = performance.now();
-      const dur = reduced ? 0 : 520;
       fly = (now) => {
-        const t = dur ? Math.min(1, (now - t0) / dur) : 1;
-        const e = 1 - Math.pow(1 - t, 3);
-        controls.target.lerpVectors(fromTarget, toTarget, e);
-        const p = from.polar + (to.polar - from.polar) * e;
-        const d = from.dist * Math.pow(to.dist / from.dist, e);
-        const a = from.az + (to.az - from.az) * e;
-        camera.position.copy(controls.target).add(new THREE.Vector3().setFromSphericalCoords(d, p, a));
-        camera.lookAt(controls.target);
+        const t = reduced ? 1 : Math.min(1, (now - t0) / dur);
+        step(1 - Math.pow(1 - t, 3));
         return t < 1;
       };
     };
+    const changed = () => ctl().dispatchEvent({ type: "change" });
+    const zoom = (factor: number) => {
+      if (camera === ortho) {
+        const from = ortho.zoom;
+        const to = Math.min(7, Math.max(0.7, from * factor));
+        return animate((e) => {
+          ortho.zoom = from * Math.pow(to / from, e);
+          ortho.updateProjectionMatrix();
+          changed();
+        });
+      }
+      const off = persp.position.clone().sub(ctl().target);
+      const from = off.length();
+      const to = Math.min(180, Math.max(14, from / factor));
+      animate((e) => {
+        persp.position.copy(ctl().target).add(off.clone().setLength(from * Math.pow(to / from, e)));
+        changed();
+      });
+    };
+    const flyToPoint = (p: THREE.Vector3) => {
+      const c = ctl();
+      const fromT = c.target.clone();
+      const toT = new THREE.Vector3(p.x, 0, p.z);
+      if (camera === ortho) {
+        const z0 = ortho.zoom;
+        const z1 = Math.max(z0, 2.2);
+        return animate((e) => {
+          c.target.lerpVectors(fromT, toT, e);
+          ortho.position.set(c.target.x, 300, c.target.z);
+          ortho.zoom = z0 + (z1 - z0) * e;
+          ortho.updateProjectionMatrix();
+          changed();
+        });
+      }
+      const sph = new THREE.Spherical().setFromVector3(persp.position.clone().sub(c.target));
+      const d1 = Math.min(sph.radius, 44);
+      animate((e) => {
+        c.target.lerpVectors(fromT, toT, e);
+        persp.position
+          .copy(c.target)
+          .add(new THREE.Vector3().setFromSphericalCoords(sph.radius * Math.pow(d1 / sph.radius, e), sph.phi, sph.theta));
+        persp.lookAt(c.target);
+        changed();
+      });
+    };
+    const reset = () => {
+      const c = ctl();
+      const from = c.target.clone();
+      if (camera === ortho) {
+        const z0 = ortho.zoom;
+        return animate((e) => {
+          c.target.lerpVectors(from, centre, e);
+          ortho.position.set(c.target.x, 300, c.target.z);
+          ortho.zoom = z0 + (1 - z0) * e;
+          ortho.updateProjectionMatrix();
+          changed();
+        });
+      }
+      const sph = new THREE.Spherical().setFromVector3(persp.position.clone().sub(c.target));
+      animate((e) => {
+        c.target.lerpVectors(from, centre, e);
+        persp.position
+          .copy(c.target)
+          .add(
+            new THREE.Vector3().setFromSphericalCoords(
+              sph.radius + (HOME_DISTANCE - sph.radius) * e,
+              sph.phi + (TILT_POLAR - sph.phi) * e,
+              sph.theta * (1 - e),
+            ),
+          );
+        persp.lookAt(c.target);
+        changed();
+      });
+    };
 
-    // ── picking ─────────────────────────────────────────────────────────────
+    // ── picking: points first, then water, then a region ────────────────────
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
+    const pickAt = (clientX: number, clientY: number) => {
+      const r = renderer.domElement.getBoundingClientRect();
+      ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+      raycaster.setFromCamera(ndc, camera);
+      // screen-space test against the visible points (more forgiving than a ray on tiny sprites)
+      let best = -1;
+      let bestD = 18;
+      marks.forEach((_, i) => {
+        if (alphas[i] <= 0) return;
+        v.copy(base[i]);
+        v.y *= world.scale.y;
+        v.project(camera);
+        const d = Math.hypot(((v.x + 1) / 2) * r.width - (clientX - r.left), ((1 - v.y) / 2) * r.height - (clientY - r.top));
+        if (v.z < 1 && d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      });
+      if (best >= 0) return { kind: "session" as const, index: best };
+      const wet = water ? raycaster.intersectObject(water, false)[0] : undefined;
+      if (wet) {
+        const nx = wet.point.x / SIZE_X;
+        const lake = [...terrain.water.lakes].sort((a, b) => Math.abs(a.x - nx) - Math.abs(b.x - nx))[0];
+        if (lake && Math.abs(lake.x - nx) < lake.rx * 1.5) return { kind: "rest" as const, span: lake.span };
+      }
+      const hit = raycaster.intersectObject(ground, false)[0];
+      if (hit) {
+        const i = Math.round((hit.point.x / SIZE_X) * (mesh.cols - 1));
+        const j = Math.round((hit.point.z / SIZE_Z) * (mesh.rows - 1));
+        const region = (geo.attributes.region.array as Float32Array)[j * mesh.cols + i];
+        if (region >= 0) return { kind: "region" as const, key: terrain.bands[region] };
+      }
+      return null;
+    };
+
     let down: { x: number; y: number } | null = null;
     const onDown = (e: PointerEvent) => {
       down = { x: e.clientX, y: e.clientY };
@@ -399,47 +729,95 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const onUp = (e: PointerEvent) => {
       if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return void (down = null);
       down = null;
-      const r = renderer.domElement.getBoundingClientRect();
-      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-      raycaster.setFromCamera(ndc, camera);
-      const hit = raycaster.intersectObject(heads, false)[0];
-      if (hit && hit.instanceId != null) {
-        const l = marks[hit.instanceId];
-        callbacks.current.onSelectSession(l);
-        if (camera.position.distanceTo(controls.target) > 50)
-          flyTo(tilted ? TILT_POLAR : FLAT_POLAR, 42, pinBase[hit.instanceId].clone().setY(0));
-        return;
-      }
-      const wet = water ? raycaster.intersectObject(water, false)[0] : undefined;
-      if (wet) {
-        const nx = wet.point.x / SIZE_X;
-        const lake = [...terrain.water.lakes].sort((a, b) => Math.abs(a.x - nx) - Math.abs(b.x - nx))[0];
-        if (lake && Math.abs(lake.x - nx) < lake.rx * 1.5) return callbacks.current.onSelectRest(lake.span);
-      }
-      callbacks.current.onClearSelection();
+      const hit = pickAt(e.clientX, e.clientY);
+      if (hit?.kind === "session") {
+        callbacks.current.onSelectSession(marks[hit.index]);
+        flyToPoint(base[hit.index]);
+      } else if (hit?.kind === "rest") callbacks.current.onSelectRest(hit.span);
+      else if (hit?.kind === "region") callbacks.current.onSelectRegion(hit.key);
+      else callbacks.current.onClearSelection();
+    };
+    // hover (mouse only; touch selects on tap): tooltip on points, region highlight on ground
+    let hoverFrame = 0;
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || e.buttons) return;
+      cancelAnimationFrame(hoverFrame);
+      hoverFrame = requestAnimationFrame(() => {
+        const hit = pickAt(e.clientX, e.clientY);
+        const r = el.getBoundingClientRect();
+        if (hit?.kind === "session") {
+          const l = marks[hit.index];
+          const a = document.createElement("div");
+          a.className = "text-[12px] font-medium";
+          a.textContent = l.session.label;
+          const b = document.createElement("div");
+          b.className = "num text-[11px] opacity-70";
+          b.textContent = `${formatShortDate(l.session.endedAt, timeZone)} · ${formatVolume(l.session.volume, unit)}${l.session.prCount ? ` · ${plural(l.session.prCount, "record")}` : ""}`;
+          tipEl.replaceChildren(a, b);
+          tipEl.style.opacity = "1";
+          tipEl.style.transform = `translate(${e.clientX - r.left + 14}px, ${e.clientY - r.top + 14}px)`;
+          renderer.domElement.style.cursor = "pointer";
+        } else {
+          tipEl.style.opacity = "0";
+          renderer.domElement.style.cursor = hit ? "pointer" : "grab";
+        }
+        setHoverRegion(
+          hit?.kind === "region"
+            ? (regionOf.get(hit.key) ?? -1)
+            : hit?.kind === "session"
+              ? (regionOf.get(marks[hit.index].session.templateKey) ?? -1)
+              : -1,
+        );
+      });
+    };
+    const onLeave = () => {
+      tipEl.style.opacity = "0";
+      setHoverRegion(-1);
     };
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointerup", onUp);
+    renderer.domElement.addEventListener("pointermove", onMove);
+    renderer.domElement.addEventListener("pointerleave", onLeave);
 
-    api.current = {
-      camera,
-      controls,
-      invalidate,
-      flyTo,
-      setSelected: (id) => {
-        const i = id ? marks.findIndex((l) => l.session.id === id) : -1;
-        ring.visible = i >= 0;
-        if (i >= 0) ring.position.copy(pinBase[i]).add(new THREE.Vector3(0, 0.15, 0));
-        invalidate();
-      },
+    const setSelected = (id: string | null) => {
+      selectedIndex = id ? marks.findIndex((l) => l.session.id === id) : -1;
+      halo.visible = leader.visible = selectedIndex >= 0;
+      if (selectedIndex >= 0) {
+        const p = base[selectedIndex];
+        halo.position.copy(p);
+        leader.position.copy(p);
+        selectedPos.copy(p).add(new THREE.Vector3(0, 7.4, 0));
+        const l = marks[selectedIndex];
+        selectedLabel.textContent = `${formatShortDate(l.session.endedAt, timeZone)} · ${l.session.label}`;
+      }
+      refreshPoints();
     };
+    const setRegion = (key: string | null) => {
+      selectedRegionIndex = key ? (regionOf.get(key) ?? -1) : -1;
+      regionUniforms.uSelected.value = selectedRegionIndex;
+      refreshPoints();
+    };
+
+    const ro = new ResizeObserver(resize);
+    ro.observe(el);
+    resize();
+    setMode(initial.current.tilted);
+    flat = flatTarget;
+    applyFlat();
+    setSelected(initial.current.selectedId);
+    setRegion(initial.current.selectedRegion);
+    api.current = { setMode, zoom, reset, setSelected, setRegion };
+    raf = requestAnimationFrame(tick);
 
     return () => {
       cancelAnimationFrame(raf);
+      cancelAnimationFrame(hoverFrame);
       ro.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointerup", onUp);
-      controls.dispose();
+      renderer.domElement.removeEventListener("pointermove", onMove);
+      renderer.domElement.removeEventListener("pointerleave", onLeave);
+      controls?.dispose();
       scene.traverse((o) => {
         const m = o as THREE.Mesh;
         m.geometry?.dispose();
@@ -451,52 +829,27 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       labelEl.replaceChildren();
       api.current = null;
     };
-    // tilted is applied by the effect below; rebuilding the scene for it would lose the camera
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terrain, seed, timeZone, theme]);
+  }, [terrain, timeZone, unit, regions, theme]);
 
-  // 2D ↔ 3D: fly the camera between top-down and tilted, keeping the place you're looking at
-  useEffect(() => {
-    const a = api.current;
-    if (!a) return;
-    const dist = a.camera.position.distanceTo(a.controls.target);
-    a.controls.minPolarAngle = 0;
-    a.controls.maxPolarAngle = 1.32;
-    a.controls.enableRotate = tilted;
-    a.flyTo(tilted ? TILT_POLAR : FLAT_POLAR, dist);
-    const t = setTimeout(() => {
-      if (!tilted) {
-        a.controls.minPolarAngle = FLAT_POLAR;
-        a.controls.maxPolarAngle = FLAT_POLAR;
-      }
-    }, 560);
-    return () => clearTimeout(t);
-  }, [tilted]);
-
-  useEffect(() => {
-    api.current?.setSelected(selectedId);
-  }, [selectedId]);
+  useEffect(() => api.current?.setMode(tilted), [tilted]);
+  useEffect(() => api.current?.setSelected(selectedId), [selectedId]);
+  useEffect(() => api.current?.setRegion(selectedRegion), [selectedRegion]);
 
   useImperativeHandle(ref, () => ({
-    zoomIn: () => {
-      const a = api.current;
-      if (!a) return;
-      const sph = new THREE.Spherical().setFromVector3(a.camera.position.clone().sub(a.controls.target));
-      a.flyTo(sph.phi, Math.max(a.controls.minDistance, sph.radius / 1.6));
-    },
-    zoomOut: () => {
-      const a = api.current;
-      if (!a) return;
-      const sph = new THREE.Spherical().setFromVector3(a.camera.position.clone().sub(a.controls.target));
-      a.flyTo(sph.phi, Math.min(a.controls.maxDistance, sph.radius * 1.6));
-    },
-    reset: () => api.current?.flyTo(tilted ? TILT_POLAR : FLAT_POLAR, HOME_DISTANCE, new THREE.Vector3(SIZE_X / 2, 0, SIZE_Z / 2)),
+    zoomIn: () => api.current?.zoom(1.6),
+    zoomOut: () => api.current?.zoom(1 / 1.6),
+    reset: () => api.current?.reset(),
   }));
 
   return (
     <div className="absolute inset-0">
       <div ref={host} className="absolute inset-0" />
-      <div ref={labelsHost} className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden />
+      <div ref={labelsHost} className="pointer-events-none absolute inset-0 overflow-hidden" />
+      <div
+        ref={tip}
+        aria-hidden
+        className="pointer-events-none absolute left-0 top-0 rounded-md bg-ink px-2.5 py-1.5 text-paper opacity-0 shadow-[var(--shadow)] transition-opacity duration-100"
+      />
     </div>
   );
 });

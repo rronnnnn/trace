@@ -226,3 +226,47 @@ export function exerciseStats(sessions: ExploreSession[], exerciseId: string) {
   }
   return { heaviest, mostReps, bestEstimate, latest };
 }
+
+export type RegionSummary = {
+  key: string;
+  name: string;
+  workouts: number;
+  records: number;
+  /** average session volume, later third vs earlier third of the period; null if too few */
+  volumeTrend: number | null;
+  recent: { session: ExploreSession; topSet: { exercise: string; weight: number | null; reps: number | null } | null; record: boolean }[];
+};
+
+/** Factual per-routine figures for the region callouts and panel. */
+export function regionSummaries(sessions: ExploreSession[]): RegionSummary[] {
+  const groups = new Map<string, ExploreSession[]>();
+  for (const s of sessions) {
+    const k = s.templateId ?? `name:${s.templateName}`;
+    groups.set(k, [...(groups.get(k) ?? []), s]);
+  }
+  return [...groups.entries()].map(([key, list]) => {
+    const ordered = [...list].sort((a, b) => a.endedAt.localeCompare(b.endedAt));
+    const third = Math.floor(ordered.length / 3);
+    const avg = (xs: ExploreSession[]) => xs.reduce((v, s) => v + s.totalVolume, 0) / Math.max(1, xs.length);
+    const early = avg(ordered.slice(0, third));
+    const late = avg(ordered.slice(-third));
+    const recent = [...ordered]
+      .reverse()
+      .slice(0, 3)
+      .map((s) => {
+        let top: { exercise: string; weight: number | null; reps: number | null } | null = null;
+        for (const e of s.exercises)
+          for (const x of e.sets)
+            if (x.completed && (!top || (x.weight ?? 0) > (top.weight ?? 0))) top = { exercise: e.name, weight: x.weight, reps: x.reps };
+        return { session: s, topSet: top, record: achievedRecords(s).length > 0 };
+      });
+    return {
+      key,
+      name: ordered[0].templateName,
+      workouts: list.length,
+      records: list.reduce((n, s) => n + achievedRecords(s).length, 0),
+      volumeTrend: third >= 2 && early > 0 ? Math.round(((late - early) / early) * 100) : null,
+      recent,
+    };
+  });
+}

@@ -141,3 +141,12 @@ describe("terrain", () => {
     expect(flat.landmarks).toHaveLength(0);
   });
 });
+
+describe("region summaries", () => {
+  it("counts workouts and measured records per routine, newest sessions first", async () => {
+    const { regionSummaries } = await import("./explore");
+    const upper = regionSummaries(sessions).find((r) => r.key === UPPER)!;
+    expect(upper).toMatchObject({ name: "Upper Body", workouts: 2, records: 2, volumeTrend: null });
+    expect(upper.recent[0]).toMatchObject({ session: { id: S3 }, record: true, topSet: { exercise: "Bench Press", weight: 65, reps: 8 } });
+  });
+});

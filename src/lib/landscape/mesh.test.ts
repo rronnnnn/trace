@@ -128,3 +128,39 @@ describe("river", () => {
     expect(out.length).toBeGreaterThan(pts.length * 2);
   });
 });
+
+describe("terrain refinement", () => {
+  it("smoothing softens noise but keeps the peaks where they are", async () => {
+    const { smoothField } = await import("./mesh");
+    const rough = Float32Array.from(terrain.field);
+    const smooth = smoothField(rough, terrain.cols, terrain.rows, 2);
+    const roughness = (f: Float32Array) => {
+      let s = 0;
+      for (let k = 1; k < f.length; k++) s += Math.abs(f[k] - f[k - 1]);
+      return s;
+    };
+    expect(roughness(smooth)).toBeLessThan(roughness(rough));
+    // the smoothed summit stands on a genuine high point of the original terrain (needle-like
+    // spikes may lose more height than broad summits, which is the point), not on new ground
+    const si = smooth.reduce((best, v, i) => (v > smooth[best] ? i : best), 0);
+    const [sx, sy] = [si % terrain.cols, Math.floor(si / terrain.cols)];
+    let near = 0;
+    for (let dy = -4; dy <= 4; dy++)
+      for (let dx = -4; dx <= 4; dx++) {
+        const x = sx + dx;
+        const y = sy + dy;
+        if (x >= 0 && y >= 0 && x < terrain.cols && y < terrain.rows) near = Math.max(near, rough[y * terrain.cols + x]);
+      }
+    expect(near).toBeGreaterThan(Math.max(...rough) * 0.85);
+    expect(Math.max(...smooth)).toBeGreaterThan(Math.max(...rough) * 0.75);
+  });
+
+  it("assigns ground near a routine's sessions to that region, open ground to none", async () => {
+    const { regionMap } = await import("./mesh");
+    const map = regionMap(terrain.landmarks, terrain.bands, terrain.cols, terrain.rows);
+    const l = terrain.landmarks[0];
+    const k = Math.round(l.y * (terrain.rows - 1)) * terrain.cols + Math.round(l.x * (terrain.cols - 1));
+    expect(terrain.bands[map[k]]).toBe(l.session.templateKey);
+    expect(map.some((v) => v === -1)).toBe(true);
+  });
+});

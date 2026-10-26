@@ -4,10 +4,18 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { IconArrowLeft, IconPlus } from "@/components/icons";
-import { RANGES, toLandscapeSessions, type ExploreSession, type RangeId, type Window } from "@/lib/landscape/explore";
+import {
+  RANGES,
+  regionSummaries,
+  toLandscapeSessions,
+  type ExploreSession,
+  type RangeId,
+  type RegionSummary,
+  type Window,
+} from "@/lib/landscape/explore";
 import { restSpans, type RestSpan } from "@/lib/landscape/rest";
 import { buildTerrain, type Landmark } from "@/lib/landscape/terrain";
-import { formatShortDate } from "@/lib/format";
+import { formatShortDate, formatWeight, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SessionDetail } from "./landscape-explorer";
 import { markerLabel } from "./landscape-parts";
@@ -19,7 +27,7 @@ const Terrain3D = dynamic(() => import("./terrain-3d").then((m) => m.Terrain3D),
   loading: () => <p className="absolute inset-0 grid place-items-center text-sm text-ink-3">Raising the terrain…</p>,
 });
 
-type Selection = { kind: "session"; id: string } | { kind: "rest"; span: RestSpan } | null;
+type Selection = { kind: "session"; id: string } | { kind: "rest"; span: RestSpan } | { kind: "region"; key: string } | null;
 
 const subscribeTheme = (fn: () => void) => {
   const mq = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
@@ -103,6 +111,12 @@ export function LandscapeExplore({
 
   const onSelectSession = useCallback((l: Landmark) => setSelected({ kind: "session", id: l.session.id }), []);
   const onSelectRest = useCallback((span: RestSpan) => setSelected({ kind: "rest", span }), []);
+  const onSelectRegion = useCallback((key: string) => setSelected({ kind: "region", key }), []);
+  const regions = useMemo(() => regionSummaries(sessions), [sessions]);
+  const selectedRegion = selected?.kind === "region" ? regions.find((r) => r.key === selected.key) : undefined;
+  // a selected session keeps its region lit, so the context stays visible
+  const litRegion =
+    selectedRegion?.key ?? (selectedSession ? (selectedSession.templateId ?? `name:${selectedSession.templateName}`) : null);
   const onClear = useCallback(() => setSelected(null), []);
 
   useEffect(() => {
@@ -150,12 +164,15 @@ export function LandscapeExplore({
           <Terrain3D
             ref={scene}
             terrain={terrain}
-            seed={seed}
             timeZone={timeZone}
+            unit={unit}
             tilted={tilted}
             selectedId={selectedSession?.id ?? null}
+            selectedRegion={litRegion}
+            regions={regions}
             theme={themeVersion}
             onSelectSession={onSelectSession}
+            onSelectRegion={onSelectRegion}
             onSelectRest={onSelectRest}
             onClearSelection={onClear}
           />
@@ -250,6 +267,15 @@ export function LandscapeExplore({
               <SessionDetail session={selectedSession} exerciseId={null} unit={unit} timeZone={timeZone} onClose={onClear} />
             ) : selected.kind === "rest" ? (
               <RestDetail span={selected.span} onClose={onClear} />
+            ) : selectedRegion ? (
+              <RegionDetail
+                region={selectedRegion}
+                unit={unit}
+                timeZone={timeZone}
+                range={range}
+                onOpen={(id) => setSelected({ kind: "session", id })}
+                onClose={onClear}
+              />
             ) : null}
           </aside>
         ) : null}
@@ -279,6 +305,104 @@ function MapButton({
     >
       {children}
     </button>
+  );
+}
+
+function RegionDetail({
+  region: r,
+  unit,
+  timeZone,
+  range,
+  onOpen,
+  onClose,
+}: {
+  region: RegionSummary;
+  unit: string;
+  timeZone: string;
+  range: RangeId;
+  onOpen: (sessionId: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <section aria-label={`Region: ${r.name}`}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-2.5">
+          <span className="size-2 rounded-full bg-sage" aria-hidden />
+          <h2 className="text-[16px] font-medium leading-tight">{r.name}</h2>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="-mr-2 -mt-1 flex size-9 items-center justify-center rounded-md text-ink-3 hover:bg-sunken hover:text-ink"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.4" aria-hidden>
+            <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
+          </svg>
+        </button>
+      </div>
+      <p className="mt-2 text-[13px] text-ink-3">
+        This routine&apos;s range: every session raises it, and its records stand as sage points.
+      </p>
+      <dl className="num mt-5 grid grid-cols-3 gap-4 border-y border-line py-4">
+        <div>
+          <dd className="text-[20px] font-medium leading-none">{r.workouts}</dd>
+          <dt className="mt-1.5 text-[11px] text-ink-3">Workouts</dt>
+        </div>
+        <div>
+          <dd className="text-[20px] font-medium leading-none">{r.records}</dd>
+          <dt className="mt-1.5 text-[11px] text-ink-3">Personal records</dt>
+        </div>
+        <div>
+          <dd className="text-[20px] font-medium leading-none">
+            {r.volumeTrend == null ? "—" : `${r.volumeTrend > 0 ? "+" : ""}${r.volumeTrend}%`}
+          </dd>
+          <dt className="mt-1.5 text-[11px] text-ink-3" title="Average session volume, latest third of the period vs the first third">
+            Volume trend
+          </dt>
+        </div>
+      </dl>
+      <div className="mt-5 flex items-baseline justify-between">
+        <h3 className="text-[13px] font-medium">Recent sessions</h3>
+        <span className="text-[11px] text-ink-3">{plural(r.workouts, "session")} in this period</span>
+      </div>
+      <ul className="mt-2">
+        {r.recent.map(({ session: s, topSet, record }) => (
+          <li key={s.id}>
+            <button
+              type="button"
+              onClick={() => onOpen(s.id)}
+              className="group flex w-full items-center gap-3 border-b border-line py-3 text-left last:border-0"
+            >
+              <span className={record ? "size-1.5 shrink-0 rounded-full bg-sage" : "size-1.5 shrink-0 rounded-full bg-ink-4"} aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="num block text-[13px] text-ink">
+                  {formatShortDate(s.endedAt, timeZone)}
+                  {record ? (
+                    <span className="ml-2 rounded-sm bg-sage-wash px-1.5 py-px text-[10px] font-medium text-sage-deep">PR</span>
+                  ) : null}
+                </span>
+                {topSet ? (
+                  <span className="num block truncate text-[12px] text-ink-3">
+                    {topSet.exercise} ·{" "}
+                    {topSet.weight != null ? `${formatWeight(topSet.weight)} ${unit} × ${topSet.reps}` : `${topSet.reps} reps`}
+                  </span>
+                ) : null}
+              </span>
+              <span className="text-ink-4 transition-colors group-hover:text-ink" aria-hidden>
+                ›
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <Link
+        href={`/landscape?workout=${encodeURIComponent(r.key)}${range !== "12w" ? `&range=${range}` : ""}`}
+        className="mt-5 flex h-10 items-center justify-center rounded-md border border-line-strong text-[13px] text-ink-2 hover:border-ink-3 hover:text-ink"
+      >
+        Explore this routine&apos;s sessions
+      </Link>
+    </section>
   );
 }
 

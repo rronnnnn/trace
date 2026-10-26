@@ -76,8 +76,8 @@
     --terrain-vegetation: #27311f;
     --terrain-shade: 1;
     --tree: #7d9967;
-    --water: #24495a;
-    --water-edge: #5f8fa0;
+    --water: #4d6876;
+    --water-edge: #7f99a6;
     color-scheme: dark;
   }
 }
@@ -108,8 +108,8 @@
   --terrain-vegetation: #27311f;
   --terrain-shade: 1;
   --tree: #7d9967;
-  --water: #24495a;
-  --water-edge: #5f8fa0;
+  --water: #4d6876;
+  --water-edge: #7f99a6;
   color-scheme: dark;
 }
 
