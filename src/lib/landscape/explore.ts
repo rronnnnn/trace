@@ -235,6 +235,8 @@ export type RegionSummary = {
   /** average session volume, later third vs earlier third of the period; null if too few */
   volumeTrend: number | null;
   recent: { session: ExploreSession; topSet: { exercise: string; weight: number | null; reps: number | null } | null; record: boolean }[];
+  /** measured records in this routine, newest first */
+  prs: { session: ExploreSession; record: ExploreRecord; exerciseName: string }[];
 };
 
 /** Factual per-routine figures for the region callouts and panel. */
@@ -260,9 +262,17 @@ export function regionSummaries(sessions: ExploreSession[]): RegionSummary[] {
             if (x.completed && (!top || (x.weight ?? 0) > (top.weight ?? 0))) top = { exercise: e.name, weight: x.weight, reps: x.reps };
         return { session: s, topSet: top, record: achievedRecords(s).length > 0 };
       });
+    const prs = [...ordered].reverse().flatMap((s) =>
+      achievedRecords(s).map((record) => ({
+        session: s,
+        record,
+        exerciseName: s.exercises.find((e) => e.exerciseId === record.exerciseId)?.name ?? "Exercise",
+      })),
+    );
     return {
       key,
       name: ordered[0].templateName,
+      prs,
       workouts: list.length,
       records: list.reduce((n, s) => n + achievedRecords(s).length, 0),
       volumeTrend: third >= 2 && early > 0 ? Math.round(((late - early) / early) * 100) : null,

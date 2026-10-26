@@ -303,7 +303,15 @@ export function buildWorld({
   };
 }
 
-export type GrowthChange = { key: string; label: string; before: number; after: number; percent: number | null; isNew: boolean; sessions: number };
+export type GrowthChange = {
+  key: string;
+  label: string;
+  before: number;
+  after: number;
+  percent: number | null;
+  isNew: boolean;
+  sessions: number;
+};
 
 /** What changed between two states of the same world, region by region (only regions that grew). */
 export function growthBetween(before: World, after: World): GrowthChange[] {
@@ -311,7 +319,15 @@ export function growthBetween(before: World, after: World): GrowthChange[] {
     .map((r) => {
       const prev = before.regions.find((p) => p.key === r.key);
       const percent = prev && prev.peak > 0 ? Math.round(((r.peak - prev.peak) / prev.peak) * 100) : null;
-      return { key: r.key, label: r.label, before: prev?.peak ?? 0, after: r.peak, percent, isNew: !prev, sessions: r.sessions - (prev?.sessions ?? 0) };
+      return {
+        key: r.key,
+        label: r.label,
+        before: prev?.peak ?? 0,
+        after: r.peak,
+        percent,
+        isNew: !prev,
+        sessions: r.sessions - (prev?.sessions ?? 0),
+      };
     })
     .filter((c) => c.sessions > 0)
     .sort((a, b) => b.after - b.before - (a.after - a.before));
@@ -320,9 +336,11 @@ export function growthBetween(before: World, after: World): GrowthChange[] {
 /** One line for the user: factual and short. */
 export function growthSentence(changes: GrowthChange[], context: "workout" | "visit") {
   if (!changes.length) return null;
-  const parts = changes.slice(0, 2).map((c) =>
-    c.isNew ? `a new ${c.label} range began` : c.percent != null && c.percent > 0 ? `${c.label} rose ${c.percent}%` : `${c.label} grew`,
-  );
+  const parts = changes
+    .slice(0, 2)
+    .map((c) =>
+      c.isNew ? `a new ${c.label} range began` : c.percent != null && c.percent > 0 ? `${c.label} rose ${c.percent}%` : `${c.label} grew`,
+    );
   const lead = context === "workout" ? "This workout" : "Since your last visit";
   const list = parts.length === 2 ? `${parts[0]} and ${parts[1]}` : parts[0];
   return `${lead}: ${list}.`;

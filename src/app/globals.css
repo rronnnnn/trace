@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Map layouts follow the input, not only the width: a phone held sideways is still a touch screen. */
+@custom-variant compact {
+  @media (max-width: 639.98px) {
+    @slot;
+  }
+  @media (pointer: coarse) {
+    @slot;
+  }
+}
+@custom-variant roomy (@media (min-width: 640px) and (not (pointer: coarse)));
+
 /*
   TRACE design tokens.
   Warm ivory paper, charcoal ink, one muted sage accent. Stone neutrals for structure.

@@ -5,16 +5,7 @@ import * as THREE from "three";
 import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { contourChains, evenLevels, resampleField } from "@/lib/landscape/contours";
 import type { RegionSummary } from "@/lib/landscape/explore";
-import {
-  edgeFalloff,
-  riverMesh,
-  SIZE_X,
-  SIZE_Z,
-  smoothField,
-  terrainMesh,
-  toWorld,
-  type MeshPalette,
-} from "@/lib/landscape/mesh";
+import { edgeFalloff, riverMesh, SIZE_X, SIZE_Z, smoothField, terrainMesh, toWorld, type MeshPalette } from "@/lib/landscape/mesh";
 import { parseColor, type RGB } from "@/lib/landscape/relief";
 import type { RestSpan } from "@/lib/landscape/rest";
 import type { Landmark } from "@/lib/landscape/terrain";
@@ -42,6 +33,7 @@ type Props = {
 };
 
 const TILT_POLAR = 0.95; // radians from straight down, for the 3D view
+const TILT_PORTRAIT = 0.78; // steadier on a tall screen: less sky, more ground
 const HOME_DISTANCE = 96;
 const ORTHO_HEIGHT = 74; // world units visible top-to-bottom in 2D at zoom 1
 const CLOSE = 52; // camera distance under which every session shows
@@ -133,10 +125,11 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
   useEffect(() => {
     callbacks.current = { onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone };
   }, [onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone]);
-  const initial = useRef({ tilted, selectedId, selectedRegion });
+  const initial = useRef({ tilted, selectedId, selectedRegion, from });
   useEffect(() => {
-    initial.current = { tilted, selectedId, selectedRegion };
-  }, [tilted, selectedId, selectedRegion]);
+    // `from` is read once, when the scene is built: clearing it after the growth must not rebuild
+    initial.current = { tilted, selectedId, selectedRegion, from };
+  }, [tilted, selectedId, selectedRegion, from]);
 
   useEffect(() => {
     const el = host.current;
@@ -205,8 +198,10 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     };
     const rgba = rgbaOf(mesh);
     // growth: start from the earlier world (same grid) and morph into today's
+    const from = initial.current.from;
     const growing =
-      Boolean(from && from.cols === terrain.cols && from.rows === terrain.rows) && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      Boolean(from && from.cols === terrain.cols && from.rows === terrain.rows) &&
+      !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     const startMesh = growing ? meshOf(from!) : null;
     const endY = new Float32Array(mesh.cols * mesh.rows);
     const startY = new Float32Array(mesh.cols * mesh.rows);
@@ -313,6 +308,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const riverEnd = river ? river.positions.slice() : null;
     if (river && startRiver && startRiver.positions.length === river.positions.length) river.positions.set(startRiver.positions);
     let water: THREE.Mesh | null = null;
+    let bankLines: THREE.LineSegments | null = null;
     if (river) {
       const wg = new THREE.BufferGeometry();
       wg.setAttribute("position", new THREE.BufferAttribute(river.positions, 3));
@@ -346,12 +342,11 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
           );
       const bg = new THREE.BufferGeometry();
       bg.setAttribute("position", new THREE.Float32BufferAttribute(banks, 3));
-      world.add(
-        new THREE.LineSegments(
-          bg,
-          new THREE.LineBasicMaterial({ color: cssColor("--water-edge", [127, 158, 168]), transparent: true, opacity: 0.55 }),
-        ),
+      bankLines = new THREE.LineSegments(
+        bg,
+        new THREE.LineBasicMaterial({ color: cssColor("--water-edge", [127, 158, 168]), transparent: true, opacity: 0.55 }),
       );
+      world.add(bankLines);
     }
 
     // ── data points ─────────────────────────────────────────────────────────
@@ -403,7 +398,12 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     // ── cameras & controls (perspective for 3D, orthographic for the flat 2D map) ─
     const persp = new THREE.PerspectiveCamera(40, 1, 0.5, 900);
     const ortho = new THREE.OrthographicCamera(-50, 50, 37, -37, 0.1, 1000);
-    ortho.up.set(0, 0, -1); // north up
+    // portrait: turn the map so its long axis runs up the screen instead of shrinking it to fit
+    const homeAz = portrait ? Math.PI / 2 : 0;
+    const homeDist = portrait ? 134 : HOME_DISTANCE;
+    const homeTilt = portrait ? TILT_PORTRAIT : TILT_POLAR;
+    if (portrait) ortho.up.set(-1, 0, 0);
+    else ortho.up.set(0, 0, -1); // north up
     let camera: THREE.Camera = persp;
     let controls: MapControls | null = null;
     const target = centre.clone();
@@ -426,7 +426,9 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       const c = new MapControls(cam, renderer.domElement);
       c.target.copy(target);
       c.enableDamping = true;
-      c.dampingFactor = 0.09;
+      c.dampingFactor = touch ? 0.16 : 0.09;
+      c.panSpeed = touch ? 1.15 : 1;
+      c.zoomSpeed = touch ? 1.1 : 1;
       c.screenSpacePanning = !is3D;
       c.zoomToCursor = true;
       c.enableRotate = is3D;
@@ -435,7 +437,9 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       c.minZoom = 0.7;
       c.maxZoom = 7;
       c.maxPolarAngle = 1.3;
-      c.touches = { ONE: THREE.TOUCH.PAN, TWO: is3D ? THREE.TOUCH.DOLLY_ROTATE : THREE.TOUCH.DOLLY_PAN };
+      // touch: one finger pans, two fingers pinch (and pan). Rotation lives on a button: pinching
+      // and turning at once is what made the gestures feel messy on phones.
+      c.touches = { ONE: THREE.TOUCH.PAN, TWO: touch || !is3D ? THREE.TOUCH.DOLLY_PAN : THREE.TOUCH.DOLLY_ROTATE };
       c.addEventListener("change", () => {
         clampTarget(c);
         invalidate();
@@ -456,9 +460,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       controls?.dispose();
       if (is3D) {
         camera = persp;
-        persp.position
-          .copy(target)
-          .add(new THREE.Vector3().setFromSphericalCoords(HOME_DISTANCE / Math.max(0.7, ortho.zoom), TILT_POLAR, 0));
+        persp.position.copy(target).add(new THREE.Vector3().setFromSphericalCoords(homeDist / Math.max(0.7, ortho.zoom), homeTilt, homeAz));
         persp.lookAt(target);
       } else {
         camera = ortho;
@@ -511,10 +513,10 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       refreshPoints();
     };
 
-    for (const band of terrain.bands) {
-      const ls = marks.filter((l) => l.session.templateKey === band);
-      if (!ls.length) continue;
-      const top = ls.reduce((best, l) => (l.height > best.height ? l : best), ls[0]);
+    // a callout stands on each range's real summit (from the world, so the same in every period)
+    for (const region of terrain.regions) {
+      const band = region.key;
+      const top = { x: region.peakX, y: region.peakY, session: { label: region.label } };
       const summary = regions.find((r) => r.key === band);
       const btn = document.createElement("button");
       btn.type = "button";
@@ -529,7 +531,9 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       title.textContent = top.session.label;
       const stat = document.createElement("span");
       stat.className = "num block whitespace-nowrap text-[11px] leading-tight text-ink-3";
-      stat.textContent = summary ? `${plural(summary.workouts, "workout")} · ${plural(summary.records, "PR")}` : "";
+      stat.textContent = summary
+        ? `${plural(summary.workouts, "workout")} · ${plural(summary.records, "PR")}`
+        : `${plural(region.sessions, "workout")} in all`;
       text.append(title, stat);
       btn.append(line, text);
       btn.setAttribute("aria-label", `${top.session.label}: ${stat.textContent}`);
@@ -582,9 +586,12 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
           y = Math.max(bh + 56, y);
           const overlaps = (r: DOMRect) =>
             placed.some((p) => !(r.right < p.left || r.left > p.right || r.bottom < p.top || r.top > p.bottom));
+          // try the summit first, then step up and down alternately, never under the top bar
+          const base = y;
           let rect = new DOMRect(x, y - bh, bw, bh);
-          for (let tries = 0; tries < 4 && overlaps(rect); tries++) {
-            y -= bh + 4;
+          for (const k of [-1, 1, -2, 2, -3, 3]) {
+            if (!overlaps(rect)) break;
+            y = Math.min(h - 72, Math.max(bh + 56, base + k * (bh + 4)));
             rect = new DOMRect(x, y - bh, bw, bh);
           }
           placed.push(rect);
@@ -601,7 +608,41 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     let lastClose = false;
     let raf = 0;
     let fly: ((now: number) => boolean) | null = null;
+    // growth: hold the earlier world for a moment, then let it rise into today's
+    let growth: { t0: number; dur: number; frame: number } | null = startMesh ? { t0: performance.now() + 700, dur: 2600, frame: 0 } : null;
+    const showDetail = (on: boolean) => {
+      for (const c of contourObjects) c.visible = on;
+      points.visible = on;
+      if (bankLines) bankLines.visible = on;
+    };
+    if (growth) showDetail(false);
+    const stepGrowth = (now: number) => {
+      if (!growth) return false;
+      const t = Math.min(1, Math.max(0, (now - growth.t0) / growth.dur));
+      const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      const pos = geo.attributes.position.array as Float32Array;
+      const col = geo.attributes.color.array as Float32Array;
+      for (let v = 0; v < endY.length; v++) pos[v * 3 + 1] = startY[v] + (endY[v] - startY[v]) * e;
+      for (let k = 0; k < col.length; k++) col[k] = startRgba[k] + (endRgba[k] - startRgba[k]) * e;
+      geo.attributes.position.needsUpdate = true;
+      geo.attributes.color.needsUpdate = true;
+      if (growth.frame++ % 2 === 0 || t === 1) geo.computeVertexNormals();
+      if (water && riverEnd && startRiver && startRiver.positions.length === riverEnd.length) {
+        const wp = water.geometry.attributes.position.array as Float32Array;
+        for (let k = 1; k < wp.length; k += 3) wp[k] = startRiver.positions[k] + (riverEnd[k] - startRiver.positions[k]) * e;
+        water.geometry.attributes.position.needsUpdate = true;
+      }
+      if (t === 1) {
+        growth = null;
+        showDetail(true);
+        refreshPoints();
+        callbacks.current.onGrowthDone?.();
+      }
+      return true;
+    };
     const tick = (now: number) => {
+      const grew = stepGrowth(now);
+      if (grew) dirty = true;
       const flying = fly ? fly(now) : false;
       if (!flying) fly = null;
       if (Math.abs(flat - flatTarget) > 0.001) {
@@ -632,7 +673,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       renderer.domElement.style.height = `${h}px`;
       persp.aspect = w / h;
       persp.updateProjectionMatrix();
-      const halfH = ORTHO_HEIGHT / 2;
+      const halfH = (portrait ? 112 : ORTHO_HEIGHT) / 2;
       Object.assign(ortho, { left: -halfH * (w / h), right: halfH * (w / h), top: halfH, bottom: -halfH });
       ortho.updateProjectionMatrix();
       invalidate();
@@ -712,14 +753,26 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
           .copy(c.target)
           .add(
             new THREE.Vector3().setFromSphericalCoords(
-              sph.radius + (HOME_DISTANCE - sph.radius) * e,
-              sph.phi + (TILT_POLAR - sph.phi) * e,
-              sph.theta * (1 - e),
+              sph.radius + (homeDist - sph.radius) * e,
+              sph.phi + (homeTilt - sph.phi) * e,
+              sph.theta + (homeAz - sph.theta) * e,
             ),
           );
         persp.lookAt(c.target);
         changed();
       });
+    };
+
+    const rotate = (radians: number) => {
+      if (camera !== persp) return;
+      const c = ctl();
+      const sph = new THREE.Spherical().setFromVector3(persp.position.clone().sub(c.target));
+      const from = sph.theta;
+      animate((e) => {
+        persp.position.copy(c.target).add(new THREE.Vector3().setFromSphericalCoords(sph.radius, sph.phi, from + radians * e));
+        persp.lookAt(c.target);
+        changed();
+      }, 420);
     };
 
     // ── picking: points first, then water, then a region ────────────────────
@@ -844,7 +897,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     applyFlat();
     setSelected(initial.current.selectedId);
     setRegion(initial.current.selectedRegion);
-    api.current = { setMode, zoom, reset, setSelected, setRegion };
+    api.current = { setMode, zoom, reset, rotate, setSelected, setRegion };
     raf = requestAnimationFrame(tick);
 
     return () => {
@@ -877,6 +930,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     zoomIn: () => api.current?.zoom(1.6),
     zoomOut: () => api.current?.zoom(1 / 1.6),
     reset: () => api.current?.reset(),
+    rotate: (radians: number) => api.current?.rotate(radians),
   }));
 
   return (

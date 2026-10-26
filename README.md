@@ -78,13 +78,28 @@ Rendering (`src/lib/landscape/relief.ts`, `rest.ts`):
 - Logic lives in `src/lib/landscape/explore.ts` (pure, unit-tested). Interactions are tested in jsdom
   (`landscape-explorer.test.tsx`).
 
+### The world grows
+
+The Explore landscape is one persistent world built from your **whole** history (`src/lib/landscape/world.ts`,
+unit-tested in `world.test.ts`); the period only chooses which sessions show as points.
+- Each routine owns a region on a seeded spine. Regions are placed in order of first appearance, so a new routine
+  never moves existing ranges, and the river is routed through a layout that does not depend on how much you trained.
+- A session adds bounded *effort* (1 for showing up, adjusted by its volume against that routine's median, plus a
+  little per measured record, capped). Height is `ln(1 + effort)`, so early sessions show and later ones keep adding
+  less. Effort only accumulates: breaks never shrink a range, and a session id is counted once.
+- After a workout (`/history/<id>?completed=1` → *See how your landscape grew*, `?grew=<id>`) or on a return visit
+  (last seen per user in localStorage), the terrain morphs from the earlier world into today's, the range that grew is
+  lit, and one factual line says what changed. Reduced motion skips the morph.
+
 ### Explore
 
 `/landscape/explore` is a real 3D scene (three.js, loaded only on this screen): a lit terrain mesh with soft shadows
 built from the same height field, draped contours, a level water surface in a carved channel, instanced low-poly
 trees, and standing pins for sessions (records in sage). The terrain fades to transparent at its borders, so it melts
-into the page. Map controls: one finger or drag pans, two fingers or scroll zoom (and rotate in 3D); 2D is the same
-scene viewed from straight above. It renders only when something moves, at native resolution (sharp at any zoom).
+into the page. Map controls: drag pans, scroll zooms, right-drag turns. On touch screens one finger pans, two fingers pinch
+and pan, and turning is on buttons in a compact bottom bar; portrait phones get a turned camera that runs the map up
+the screen, a bottom sheet for details, and lighter rendering (smaller grid, no shadow pass). 2D is the same scene
+viewed from straight above. It renders only when something moves, at native resolution (sharp at any zoom).
 Labels are HTML projected from 3D. Geometry builders are pure and unit-tested in `src/lib/landscape/mesh.ts`.
 
 ## Goals

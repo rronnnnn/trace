@@ -46,7 +46,10 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
             ? ` ${measuredRecords} new record${measuredRecords > 1 ? "s" : ""}, marked below.`
             : isFirstSession
               ? " These numbers are your baseline; future sessions are measured against them."
-              : ""}
+              : ""}{" "}
+          <Link href={`/landscape/explore?grew=${s.id}`} className="font-medium underline underline-offset-4">
+            See how your landscape grew
+          </Link>
         </div>
       ) : null}
 
