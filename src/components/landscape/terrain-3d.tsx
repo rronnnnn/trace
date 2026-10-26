@@ -7,7 +7,6 @@ import { contourChains, evenLevels, resampleField } from "@/lib/landscape/contou
 import type { RegionSummary } from "@/lib/landscape/explore";
 import {
   edgeFalloff,
-  regionMap,
   riverMesh,
   SIZE_X,
   SIZE_Z,
@@ -18,13 +17,17 @@ import {
 } from "@/lib/landscape/mesh";
 import { parseColor, type RGB } from "@/lib/landscape/relief";
 import type { RestSpan } from "@/lib/landscape/rest";
-import type { Landmark, Terrain } from "@/lib/landscape/terrain";
+import type { Landmark } from "@/lib/landscape/terrain";
+import type { World } from "@/lib/landscape/world";
 import { formatShortDate, formatVolume, plural } from "@/lib/format";
 
-export type Terrain3DHandle = { zoomIn: () => void; zoomOut: () => void; reset: () => void };
+export type Terrain3DHandle = { zoomIn: () => void; zoomOut: () => void; reset: () => void; rotate: (radians: number) => void };
 
 type Props = {
-  terrain: Terrain;
+  terrain: World;
+  /** an earlier state of the same world; when given, the terrain grows from it into `terrain` */
+  from?: World | null;
+  onGrowthDone?: () => void;
   timeZone: string;
   unit: string;
   tilted: boolean;
@@ -98,6 +101,8 @@ const markerShader = {
 export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
   {
     terrain,
+    from,
+    onGrowthDone,
     timeZone,
     unit,
     tilted,
@@ -120,13 +125,14 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     setSelected: (id: string | null) => void;
     setRegion: (key: string | null) => void;
     zoom: (factor: number) => void;
+    rotate: (radians: number) => void;
     reset: () => void;
   };
   const api = useRef<Api | null>(null);
-  const callbacks = useRef({ onSelectSession, onSelectRegion, onSelectRest, onClearSelection });
+  const callbacks = useRef({ onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone });
   useEffect(() => {
-    callbacks.current = { onSelectSession, onSelectRegion, onSelectRest, onClearSelection };
-  }, [onSelectSession, onSelectRegion, onSelectRest, onClearSelection]);
+    callbacks.current = { onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone };
+  }, [onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone]);
   const initial = useRef({ tilted, selectedId, selectedRegion });
   useEffect(() => {
     initial.current = { tilted, selectedId, selectedRegion };
@@ -141,9 +147,12 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const dark = root.dataset.theme === "dark" || (!root.dataset.theme && window.matchMedia?.("(prefers-color-scheme: dark)").matches);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // phones and tablets: lighter rendering (no shadow pass, capped pixel ratio), same scene
+    const touch = Boolean(window.matchMedia?.("(pointer: coarse)").matches);
+    const portrait = el.clientHeight > el.clientWidth * 1.1;
+    const dpr = Math.min(window.devicePixelRatio || 1, touch ? 1.5 : 2);
     renderer.setPixelRatio(dpr);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = !touch;
     renderer.shadowMap.type = THREE.VSMShadowMap; // soft, blurred shadows rather than hard black patches
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -163,7 +172,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const sun = new THREE.DirectionalLight(0xffffff, dark ? 1.5 : 1.6);
     sun.position.set(-45, 60, -35);
     sun.target.position.copy(centre);
-    sun.castShadow = true;
+    sun.castShadow = !touch;
     sun.shadow.mapSize.set(1024, 1024);
     Object.assign(sun.shadow.camera, { left: -70, right: 70, top: 60, bottom: -60 });
     sun.shadow.radius = 7;
@@ -177,23 +186,46 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     scene.add(world);
 
     // ── terrain ───────────────────────────────────────────────────────────
-    const smooth = { ...terrain, field: smoothField(terrain.field, terrain.cols, terrain.rows, 4) };
-    const mesh = terrainMesh(smooth, palette(), 15, 1.7);
+    const pal = palette();
+    const meshOf = (w: World) =>
+      // the "before" world is carved along today's river, so both states share one channel
+      terrainMesh({ ...w, field: smoothField(w.field, w.cols, w.rows, 4), water: terrain.water }, pal, 15, 1.7);
+    const mesh = meshOf(terrain);
     const tmp = new THREE.Color();
-    const rgba = new Float32Array((mesh.colors.length / 3) * 4);
-    for (let v = 0; v < mesh.colors.length / 3; v++) {
-      const k = v * 3;
-      tmp.setRGB(mesh.colors[k], mesh.colors[k + 1], mesh.colors[k + 2], THREE.SRGBColorSpace);
-      // fade to transparent at the borders: the page shows through, the map has no edge
-      const f = edgeFalloff((v % mesh.cols) / (mesh.cols - 1), Math.floor(v / mesh.cols) / (mesh.rows - 1), 0.22);
-      rgba.set([tmp.r, tmp.g, tmp.b, f * f * f], v * 4);
+    const rgbaOf = (m: typeof mesh) => {
+      const out = new Float32Array((m.colors.length / 3) * 4);
+      for (let v = 0; v < m.colors.length / 3; v++) {
+        const k = v * 3;
+        tmp.setRGB(m.colors[k], m.colors[k + 1], m.colors[k + 2], THREE.SRGBColorSpace);
+        // fade to transparent at the borders: the page shows through, the map has no edge
+        const f = edgeFalloff((v % m.cols) / (m.cols - 1), Math.floor(v / m.cols) / (m.rows - 1), 0.22);
+        out.set([tmp.r, tmp.g, tmp.b, f * f * f], v * 4);
+      }
+      return out;
+    };
+    const rgba = rgbaOf(mesh);
+    // growth: start from the earlier world (same grid) and morph into today's
+    const growing =
+      Boolean(from && from.cols === terrain.cols && from.rows === terrain.rows) && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const startMesh = growing ? meshOf(from!) : null;
+    const endY = new Float32Array(mesh.cols * mesh.rows);
+    const startY = new Float32Array(mesh.cols * mesh.rows);
+    for (let v = 0; v < endY.length; v++) {
+      endY[v] = mesh.positions[v * 3 + 1];
+      startY[v] = startMesh ? startMesh.positions[v * 3 + 1] : endY[v];
+    }
+    const endRgba = rgba.slice();
+    const startRgba = startMesh ? rgbaOf(startMesh) : endRgba;
+    if (startMesh) {
+      for (let v = 0; v < endY.length; v++) mesh.positions[v * 3 + 1] = startY[v];
+      rgba.set(startRgba);
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(rgba, 4));
-    const regions3d = regionMap(terrain.landmarks, terrain.bands, mesh.cols, mesh.rows);
-    geo.setAttribute("region", new THREE.BufferAttribute(regions3d, 1));
-    geo.setAttribute("regionStrength", new THREE.BufferAttribute(regions3d.strength, 1));
+    // regions come from the world itself, so a region is the same ground in every period and mode
+    geo.setAttribute("region", new THREE.BufferAttribute(terrain.regionIndex, 1));
+    geo.setAttribute("regionStrength", new THREE.BufferAttribute(terrain.regionStrength, 1));
     geo.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
     geo.computeVertexNormals();
 
@@ -242,7 +274,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const lineSet = (opacity: number) => ({ pos: [] as number[], col: [] as number[], opacity });
     const fine = lineSet(dark ? 0.2 : 0.2);
     const index = lineSet(dark ? 0.4 : 0.36);
-    for (const c of contourChains(contourField, cc, cr, 1, 1, evenLevels(40, 0.02, 0.95), 5)) {
+    for (const c of contourChains(contourField, cc, cr, 1, 1, evenLevels(48, 0.015, 1.25), 5)) {
       const set = c.index ? index : fine;
       for (const chain of c.chains)
         for (let i = 0; i < chain.length - 1; i++) {
@@ -265,15 +297,21 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
           );
         }
     }
+    const contourObjects: THREE.LineSegments[] = [];
     for (const set of [fine, index]) {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(set.pos, 3));
       g.setAttribute("color", new THREE.Float32BufferAttribute(set.col, 4));
-      world.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false })));
+      const lines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false }));
+      contourObjects.push(lines);
+      world.add(lines);
     }
 
     // ── river: muted, matte, with a faint bank line ─────────────────────────
     const river = riverMesh(terrain.water.river, mesh.heightAt, 0.3, 1.5, mesh.riverBed);
+    const startRiver = startMesh ? riverMesh(terrain.water.river, startMesh.heightAt, 0.3, 1.5, startMesh.riverBed) : null;
+    const riverEnd = river ? river.positions.slice() : null;
+    if (river && startRiver && startRiver.positions.length === river.positions.length) river.positions.set(startRiver.positions);
     let water: THREE.Mesh | null = null;
     if (river) {
       const wg = new THREE.BufferGeometry();
@@ -410,7 +448,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     let flatTarget = 0;
     const applyFlat = () => {
       world.scale.y = 1 - 0.995 * flat;
-      sun.castShadow = flat < 0.5;
+      sun.castShadow = !touch && flat < 0.5;
       plain.visible = flat < 0.5;
     };
 

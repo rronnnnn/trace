@@ -107,7 +107,7 @@ function valueNoise(seed: number, x: number, y: number) {
   return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
 }
 
-function fbm(seed: number, x: number, y: number) {
+export function fbm(seed: number, x: number, y: number) {
   let sum = 0;
   let amp = 0.5;
   let freq = 1;
@@ -130,7 +130,7 @@ export function dateToX(date: string | Date, start: Date, end: Date) {
 }
 
 /** Ridged multifractal: sharp crests and gullies, the texture of real mountain ranges. */
-function ridged(seed: number, x: number, y: number) {
+export function ridged(seed: number, x: number, y: number) {
   let sum = 0;
   let amp = 0.5;
   let freq = 1;
@@ -305,7 +305,7 @@ export function buildTerrain({ sessions, seed, start, end, cols = 120, rows = 72
  * per column) and carves it, plus one lake per rest span, into the field. Runs before
  * normalisation so contours wrap the water naturally. Deterministic: same field, same river.
  */
-function carveWater(
+export function carveWater(
   field: Float32Array,
   cols: number,
   rows: number,
@@ -314,6 +314,10 @@ function carveWater(
   start: Date,
   end: Date,
   seed: number,
+  /** route through this field instead of the heights (keeps the river's course stable as terrain grows) */
+  costField: Float32Array = field,
+  /** carve depth in field units; defaults to a share of the field's own range */
+  depthAbs?: number,
 ): Water {
   // Dynamic programming over columns. Cost is height, plus a pull away from the map edges and a
   // small price for each change of row, so the river meanders instead of zig-zagging.
@@ -326,7 +330,7 @@ function carveWater(
   const from = new Int16Array(cols * rows);
   // Seeded noise in the cost lets the river wander the way real water does, around small rises.
   const wander = (i: number, j: number) => 0.35 * fbm(seed + 77, (i / cols) * 5, (j / rows) * 4);
-  for (let j = 0; j < rows; j++) cost[j * cols] = field[j * cols] + edge(j) + wander(0, j);
+  for (let j = 0; j < rows; j++) cost[j * cols] = costField[j * cols] + edge(j) + wander(0, j);
   for (let i = 1; i < cols; i++) {
     for (let j = 0; j < rows; j++) {
       let best = Infinity;
@@ -340,7 +344,7 @@ function carveWater(
           arg = pj;
         }
       }
-      cost[j * cols + i] = best + field[j * cols + i] + edge(j) + wander(i, j);
+      cost[j * cols + i] = best + costField[j * cols + i] + edge(j) + wander(i, j);
       from[j * cols + i] = arg;
     }
   }
@@ -413,7 +417,7 @@ function carveWater(
     if (h < lo) lo = h;
     if (h > hi) hi = h;
   }
-  const depth = (hi - lo) * 0.16;
+  const depth = depthAbs ?? (hi - lo) * 0.16;
   // One smooth valley profile along the whole river (varying it per column streaks the shading).
   const sigma = 0.035;
   for (let i = 0; i < cols; i++) {

@@ -3,6 +3,7 @@ import "server-only";
 import { buildWindow, parseRange, type ExploreSession, type RecordKind } from "@/lib/landscape/explore";
 import { requireProfile } from "@/lib/supabase/server";
 import { getTimeZone } from "@/lib/timezone";
+import { loadWorldHistory } from "@/lib/landscape/world-history";
 
 const ID = /^[0-9a-f-]{36}$|^name:.{1,80}$/i;
 export const param = (v: string | string[] | undefined) => (typeof v === "string" && ID.test(v) ? v : null);
@@ -68,5 +69,8 @@ export async function loadLandscape(sp: Record<string, string | string[] | undef
     : { data: [] as { id: string; primary_muscle: string }[] };
   const muscles = Object.fromEntries((library ?? []).map((e) => [e.id, e.primary_muscle]));
 
-  return { sessions, range, win, tz, userId, profile, muscles, totalSessionsEver: totalSessionsEver ?? 0 };
+  // the world itself is built from all of history; the period only chooses what is shown
+  const history = await loadWorldHistory(supabase);
+
+  return { sessions, history, range, win, tz, userId, profile, muscles, totalSessionsEver: totalSessionsEver ?? 0 };
 }
