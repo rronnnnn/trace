@@ -76,8 +76,8 @@
     --terrain-vegetation: #27311f;
     --terrain-shade: 1;
     --tree: #7d9967;
-    --water: #1d3640;
-    --water-edge: #4e7886;
+    --water: #24495a;
+    --water-edge: #5f8fa0;
     color-scheme: dark;
   }
 }
@@ -108,8 +108,8 @@
   --terrain-vegetation: #27311f;
   --terrain-shade: 1;
   --tree: #7d9967;
-  --water: #1d3640;
-  --water-edge: #4e7886;
+  --water: #24495a;
+  --water-edge: #5f8fa0;
   color-scheme: dark;
 }
 
@@ -227,4 +227,16 @@
     opacity: 0;
     transform: translateY(12px) scale(0.99);
   }
+}
+
+/* Maps dissolve into the page at their edges instead of sitting in a framed window. */
+.map-fade {
+  -webkit-mask-image:
+    linear-gradient(to right, transparent, #000 7%, #000 93%, transparent),
+    linear-gradient(to bottom, transparent, #000 9%, #000 91%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, transparent, #000 7%, #000 93%, transparent),
+    linear-gradient(to bottom, transparent, #000 9%, #000 91%, transparent);
+  mask-composite: intersect;
 }

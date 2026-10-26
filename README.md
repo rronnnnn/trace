@@ -80,10 +80,12 @@ Rendering (`src/lib/landscape/relief.ts`, `rest.ts`):
 
 ### Explore
 
-`/landscape/explore` is the full-screen map: drag to pan, scroll or pinch to zoom, double-tap to zoom in, arrows and
-+/−/0 on the keyboard. Detail grows with zoom: denser contours, then session dates and rest labels. Range names
-label each routine. A perspective tilt (3D, on by default) can be switched off. Camera maths lives in
-`src/lib/landscape/viewport.ts` (unit-tested).
+`/landscape/explore` is a real 3D scene (three.js, loaded only on this screen): a lit terrain mesh with soft shadows
+built from the same height field, draped contours, a level water surface in a carved channel, instanced low-poly
+trees, and standing pins for sessions (records in sage). The terrain fades to transparent at its borders, so it melts
+into the page. Map controls: one finger or drag pans, two fingers or scroll zoom (and rotate in 3D); 2D is the same
+scene viewed from straight above. It renders only when something moves, at native resolution (sharp at any zoom).
+Labels are HTML projected from 3D. Geometry builders are pure and unit-tested in `src/lib/landscape/mesh.ts`.
 
 ## Goals
 

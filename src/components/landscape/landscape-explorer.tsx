@@ -208,7 +208,7 @@ export function LandscapeExplorer({
       <div className="mt-6 grid gap-8 xl:grid-cols-[minmax(0,1fr)_320px] xl:gap-10">
         {/* Map + week navigator */}
         <div className="min-w-0">
-          <div className="relative overflow-hidden rounded-md border border-line bg-surface/60" style={{ aspectRatio: `${W} / ${H}` }}>
+          <div className="map-fade relative -mx-4 overflow-hidden sm:mx-0" style={{ aspectRatio: `${W} / ${H}` }}>
             <svg viewBox={`0 0 ${W} ${H}`} className="block h-full w-full" role="group" aria-labelledby={titleId}>
               <title id={titleId}>{`Training landscape: ${plural(visible.length, "session")} shown`}</title>
               <ReliefLayer terrain={terrain} width={W} height={H} />

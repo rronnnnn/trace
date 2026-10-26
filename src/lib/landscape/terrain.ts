@@ -270,7 +270,7 @@ export function buildTerrain({ sessions, seed, start, end, cols = 120, rows = 72
       // Training raises the mass; ridged detail scaled by that mass carves spurs and gullies into
       // it, so trained-on ground reads as mountains while untrained lowland stays smooth.
       const crag = ridged(s + 1, nx * 9, ny * 6.5);
-      h += mass * (0.5 + 1.05 * crag);
+      h += mass * (0.42 + 1.25 * crag);
       field[j * cols + i] = h;
     }
   }
@@ -287,7 +287,7 @@ export function buildTerrain({ sessions, seed, start, end, cols = 120, rows = 72
   const range = max - min || 1;
   // A gentle power curve: summits rise out of their ranges instead of reading as mesas,
   // and the valleys (where the water runs) open up.
-  for (let k = 0; k < field.length; k++) field[k] = Math.pow((field[k] - min) / range, 1.35);
+  for (let k = 0; k < field.length; k++) field[k] = Math.pow((field[k] - min) / range, 1.55);
 
   for (const l of landmarks) {
     const i = Math.round(l.x * (cols - 1));
@@ -351,18 +351,21 @@ function carveWater(
     rowsAt[i] = j;
     j = from[j * cols + i];
   }
-  // Smooth the stepped path into a river line.
-  const win = Math.max(2, Math.round(cols / 28));
-  const yAt = rowsAt.map((_, i) => {
-    let sum = 0;
-    let n = 0;
-    for (let k = i - win; k <= i + win; k++) {
-      if (k < 0 || k >= cols) continue;
-      sum += rowsAt[k];
-      n++;
-    }
-    return sum / n / (rows - 1);
-  });
+  // Smooth the stepped path into a river line: two wide box passes (≈ a Gaussian), so the
+  // row-by-row steps of the search never show as kinks in the water.
+  const box = (src: number[], win: number) =>
+    src.map((_, i) => {
+      let sum = 0;
+      let n = 0;
+      for (let k = i - win; k <= i + win; k++) {
+        if (k < 0 || k >= src.length) continue;
+        sum += src[k];
+        n++;
+      }
+      return sum / n;
+    });
+  const win = Math.max(3, Math.round(cols / 14));
+  const yAt = box(box(rowsAt, win), win).map((r) => r / (rows - 1));
   // Width: a slender stream that swells smoothly into broad reaches at rest spans, so the
   // water is one continuous river and rest reads as where it widens and slows.
   const BASE = 0.0032;

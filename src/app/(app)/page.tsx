@@ -152,7 +152,7 @@ export default async function TodayPage() {
         </div>
 
         <figure className="flex flex-col">
-          <div className="relative aspect-[6/5] min-h-[420px] overflow-hidden rounded-md border border-line bg-surface/60 md:aspect-auto md:flex-1">
+          <div className="map-fade relative -mx-5 aspect-[6/5] min-h-[420px] overflow-hidden sm:mx-0 md:aspect-auto md:flex-1">
             <LandscapeMap
               sessions={landscape}
               seed={userId}

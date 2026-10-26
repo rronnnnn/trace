@@ -29,6 +29,8 @@ const TABLE: Record<number, [number, number][]> = {
   14: [[LEFT, BOTTOM]],
 };
 
+export type ContourChains = { level: number; index: boolean; chains: Pt[][] };
+
 export function contourLines(
   field: Float32Array,
   cols: number,
@@ -38,6 +40,23 @@ export function contourLines(
   levels: number[],
   indexEvery = 5,
 ): ContourLine[] {
+  return contourChains(field, cols, rows, width, height, levels, indexEvery).map((c) => ({
+    level: c.level,
+    index: c.index,
+    d: c.chains.map(smoothPath).join(""),
+  }));
+}
+
+/** Contours as point chains in (width × height) space, for renderers that draw their own lines. */
+export function contourChains(
+  field: Float32Array,
+  cols: number,
+  rows: number,
+  width: number,
+  height: number,
+  levels: number[],
+  indexEvery = 5,
+): ContourChains[] {
   const sx = width / (cols - 1);
   const sy = height / (rows - 1);
   const v = (i: number, j: number) => field[j * cols + i];
@@ -128,7 +147,7 @@ export function contourLines(
     for (const [key, n] of links) if (n.length === 1 && !visited.has(key)) walk(key);
     for (const key of links.keys()) if (!visited.has(key)) walk(key);
 
-    return { level, index: (li + 1) % indexEvery === 0, d: chains.map(smoothPath).join("") };
+    return { level, index: (li + 1) % indexEvery === 0, chains };
   });
 }
 
