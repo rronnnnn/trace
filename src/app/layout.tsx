@@ -25,6 +25,9 @@ export const viewport: Viewport = {
   ],
   width: "device-width",
   initialScale: 1,
+  // an app, not a document: the page itself never pinch-zooms (the map has its own zoom)
+  maximumScale: 1,
+  userScalable: false,
   viewportFit: "cover",
 };
 

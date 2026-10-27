@@ -81,6 +81,8 @@ export function terrainMesh(
   // so the water surface is never pierced by ground. The river has one point per column.
   const river = terrain.water?.river;
   let bedProfile: Float32Array | null = null;
+  // the river corridor: only this ground is softened after carving, the mountains keep their crags
+  const corridor = new Uint8Array(cols * rows);
   if (river && river.length === cols) {
     const raw = new Float32Array(cols);
     for (let i = 0; i < cols; i++) {
@@ -110,8 +112,10 @@ export function terrainMesh(
       const half = Math.max(w * riverWiden * taper * 1.9, 1.6 / (rows - 1));
       for (let j = 0; j < rows; j++) {
         const d = Math.abs(j / (rows - 1) - ry);
-        if (d > half * 1.6) continue;
+        if (d > half * 1.6 + 1 / (rows - 1)) continue;
         const k = j * cols + i;
+        corridor[k] = 1;
+        if (d > half * 1.6) continue;
         // flat under the water, easing back up to the original ground across the bank
         const t = d <= half ? 0 : smoothstep(half, half * 1.6, d);
         const target = bedProfile[i] + (heights[k] - bedProfile[i]) * t;
@@ -130,7 +134,7 @@ export function terrainMesh(
     for (let k = 0; k < heights.length; k++) {
       const i = k % cols;
       const j = (k - i) / cols;
-      if (i === 0 || j === 0 || i === cols - 1 || j === rows - 1) continue; // the rim stays on the ground
+      if (!corridor[k] || i === 0 || j === 0 || i === cols - 1 || j === rows - 1) continue; // the rim stays on the ground
       const h = Math.min(soft[k], heights[k] + (soft[k] - heights[k]) * (soft[k] > heights[k] ? 0.5 : 1));
       heights[k] = h;
       positions[k * 3 + 1] = h;

@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { contourChains, evenLevels, resampleField } from "@/lib/landscape/contours";
 import type { RegionSummary } from "@/lib/landscape/explore";
-import { edgeFalloff, riverMesh, SIZE_X, SIZE_Z, smoothField, terrainMesh, toWorld, type MeshPalette } from "@/lib/landscape/mesh";
+import { edgeFalloff, riverMesh, SIZE_X, SIZE_Z, terrainMesh, toWorld, type MeshPalette } from "@/lib/landscape/mesh";
 import { parseColor, type RGB } from "@/lib/landscape/relief";
 import type { RestSpan } from "@/lib/landscape/rest";
 import type { Landmark } from "@/lib/landscape/terrain";
@@ -149,7 +149,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     renderer.shadowMap.type = THREE.VSMShadowMap; // soft, blurred shadows rather than hard black patches
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.22;
+    renderer.toneMappingExposure = touch ? 1.4 : 1.22;
     renderer.domElement.style.display = "block";
     renderer.domElement.style.touchAction = "none";
     el.appendChild(renderer.domElement);
@@ -160,10 +160,14 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const sage = cssColor("--sage", [93, 111, 80]);
 
     // soft, mostly ambient light; one low-intensity key from the north-west reveals the form
-    scene.add(new THREE.HemisphereLight(dark ? 0xb4bcc4 : 0xffffff, dark ? 0x1a1d1a : 0x8f8774, dark ? 2.3 : 1.7));
+    // touch renders without shadows, so it gets more fill to keep slopes readable
+    const fill = touch ? 1.3 : 1;
+    scene.add(new THREE.HemisphereLight(dark ? 0xb4bcc4 : 0xffffff, dark ? 0x2a2e2a : 0x8f8774, (dark ? 2.3 : 1.7) * fill));
     const centre = new THREE.Vector3(SIZE_X / 2, 0, SIZE_Z / 2);
-    const sun = new THREE.DirectionalLight(0xffffff, dark ? 1.5 : 1.6);
-    sun.position.set(-45, 60, -35);
+    const sun = new THREE.DirectionalLight(0xffffff, (dark ? 1.5 : 1.6) * fill);
+    // portrait turns the map a quarter; the sun turns with it, so the lit faces still face the viewer
+    const homeAz = portrait ? Math.PI / 2 : 0;
+    sun.position.copy(centre).add(new THREE.Vector3(-45, 60, -35).sub(centre).applyAxisAngle(new THREE.Vector3(0, 1, 0), homeAz));
     sun.target.position.copy(centre);
     sun.castShadow = !touch;
     sun.shadow.mapSize.set(1024, 1024);
@@ -182,7 +186,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const pal = palette();
     const meshOf = (w: World) =>
       // the "before" world is carved along today's river, so both states share one channel
-      terrainMesh({ ...w, field: smoothField(w.field, w.cols, w.rows, 4), water: terrain.water }, pal, 15, 1.7);
+      terrainMesh({ ...w, water: terrain.water }, pal, 15, 1.7);
     const mesh = meshOf(terrain);
     const tmp = new THREE.Color();
     const rgbaOf = (m: typeof mesh) => {
@@ -399,7 +403,6 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const persp = new THREE.PerspectiveCamera(40, 1, 0.5, 900);
     const ortho = new THREE.OrthographicCamera(-50, 50, 37, -37, 0.1, 1000);
     // portrait: turn the map so its long axis runs up the screen instead of shrinking it to fit
-    const homeAz = portrait ? Math.PI / 2 : 0;
     const homeDist = portrait ? 134 : HOME_DISTANCE;
     const homeTilt = portrait ? TILT_PORTRAIT : TILT_POLAR;
     if (portrait) ortho.up.set(-1, 0, 0);
@@ -433,8 +436,8 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       c.zoomToCursor = true;
       c.enableRotate = is3D;
       c.minDistance = 14;
-      c.maxDistance = 180;
-      c.minZoom = 0.7;
+      c.maxDistance = homeDist;
+      c.minZoom = 1;
       c.maxZoom = 7;
       c.maxPolarAngle = 1.3;
       // touch: one finger pans, two fingers pinch (and pan). Rotation lives on a button: pinching
@@ -460,7 +463,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       controls?.dispose();
       if (is3D) {
         camera = persp;
-        persp.position.copy(target).add(new THREE.Vector3().setFromSphericalCoords(homeDist / Math.max(0.7, ortho.zoom), homeTilt, homeAz));
+        persp.position.copy(target).add(new THREE.Vector3().setFromSphericalCoords(homeDist / Math.max(1, ortho.zoom), homeTilt, homeAz));
         persp.lookAt(target);
       } else {
         camera = ortho;
@@ -692,7 +695,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const zoom = (factor: number) => {
       if (camera === ortho) {
         const from = ortho.zoom;
-        const to = Math.min(7, Math.max(0.7, from * factor));
+        const to = Math.min(7, Math.max(1, from * factor));
         return animate((e) => {
           ortho.zoom = from * Math.pow(to / from, e);
           ortho.updateProjectionMatrix();
@@ -701,7 +704,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       }
       const off = persp.position.clone().sub(ctl().target);
       const from = off.length();
-      const to = Math.min(180, Math.max(14, from / factor));
+      const to = Math.min(homeDist, Math.max(14, from / factor));
       animate((e) => {
         persp.position.copy(ctl().target).add(off.clone().setLength(from * Math.pow(to / from, e)));
         changed();
