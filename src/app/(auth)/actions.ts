@@ -60,3 +60,33 @@ export async function signUp(_: AuthState, form: FormData): Promise<AuthState> {
   }
   redirect("/onboarding");
 }
+
+export async function requestPasswordReset(_: AuthState, form: FormData): Promise<AuthState> {
+  const email = String(form.get("email") ?? "")
+    .trim()
+    .toLowerCase();
+  if (!EMAIL.test(email)) return { error: "Enter a valid email address.", email };
+
+  const origin = (await headers()).get("origin") ?? "";
+  const supabase = await supabaseServer();
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/auth/callback?next=/reset-password`,
+  });
+  if (error) return { error: error.message, email };
+  // Same message whether or not the account exists.
+  return { notice: `If ${email} has an account, we sent a reset link. Open it on this device.`, email };
+}
+
+export async function updatePassword(_: AuthState, form: FormData): Promise<AuthState> {
+  const password = String(form.get("password") ?? "");
+  if (password.length < 8) return { error: "Use at least 8 characters for your password." };
+
+  const supabase = await supabaseServer();
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) {
+    return {
+      error: error.code === "same_password" ? "Choose a password different from your old one." : error.message,
+    };
+  }
+  redirect("/");
+}

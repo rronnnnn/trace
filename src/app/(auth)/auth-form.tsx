@@ -53,7 +53,14 @@ export function AuthForm({
           />
         </div>
         <div>
-          <Label htmlFor="password">Password</Label>
+          <div className="flex items-baseline justify-between">
+            <Label htmlFor="password">Password</Label>
+            {isSignUp ? null : (
+              <Link href="/forgot-password" className="text-xs text-ink-3 underline underline-offset-4 hover:text-ink">
+                Forgot password?
+              </Link>
+            )}
+          </div>
           <Input
             id="password"
             name="password"
