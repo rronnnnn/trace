@@ -51,6 +51,10 @@ export async function signUp(_: AuthState, form: FormData): Promise<AuthState> {
     options: { emailRedirectTo: `${origin}/auth/callback?next=/onboarding` },
   });
   if (error) return { error: error.message, email };
+  // Supabase fakes success for an already-registered email (no mail is sent); it shows up as no identities.
+  if (data.user && data.user.identities?.length === 0) {
+    return { error: "An account with this email already exists. Sign in instead.", email };
+  }
   if (!data.session) {
     return { notice: `We sent a confirmation link to ${email}. Open it on this device to continue.`, email };
   }
