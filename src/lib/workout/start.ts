@@ -162,6 +162,7 @@ export async function loadLibrary(ownerId: string): Promise<ExerciseRef[]> {
     const { data, error } = await supabaseBrowser()
       .from("exercises")
       .select("id, name, primary_muscle, equipment, measure, variation_of")
+      .is("archived_at", null)
       .order("name");
     if (error) throw error;
     const items = data.map(toExerciseRef);

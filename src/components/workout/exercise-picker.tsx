@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { loadLibrary } from "@/lib/workout/start";
 import type { ExerciseRef } from "@/lib/workout/types";
 import { cn } from "@/lib/utils";
+import { ExerciseForm } from "./exercise-form";
 
 /**
  * Library search. When `relativeTo` is given (substitution), related movements come first:
@@ -31,6 +32,7 @@ export function ExercisePicker({
   const [library, setLibrary] = useState<ExerciseRef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (!open || library) return;
@@ -82,6 +84,16 @@ export function ExercisePicker({
         {library && groups.every((g) => !g.items.length) ? (
           <p className="px-3 py-6 text-sm text-ink-3">No exercises match “{query}”.</p>
         ) : null}
+        {library ? (
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className="mt-2 flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-[14px] text-ink-2 hover:bg-sunken hover:text-ink"
+          >
+            <span aria-hidden>+</span>
+            {query.trim() ? `Create “${query.trim()}”` : "Create a new exercise"}
+          </button>
+        ) : null}
         {groups.map((g) => (
           <div key={g.label} className="pt-3">
             <p className="eyebrow px-3 pb-1">{g.label}</p>
@@ -109,6 +121,17 @@ export function ExercisePicker({
           </div>
         ))}
       </div>
+      <ExerciseForm
+        open={creating}
+        onOpenChange={setCreating}
+        initial={{ name: query.trim() }}
+        onSaved={(e) => {
+          if (!e) return;
+          setLibrary((l) => (l ? [...l, e].sort((a, b) => a.name.localeCompare(b.name)) : l));
+          setQuery("");
+          onPick(e);
+        }}
+      />
     </Sheet>
   );
 }

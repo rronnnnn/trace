@@ -47,6 +47,7 @@ export type Database = {
           equipment: string;
           measure: string;
           variation_of: string | null;
+          archived_at: string | null;
           created_at: string;
         },
         "slug" | "name" | "primary_muscle" | "category" | "equipment",
@@ -205,6 +206,8 @@ export type Database = {
       clear_sample_history: { Args: never; Returns: undefined };
       recompute_personal_records: { Args: never; Returns: undefined };
       derive_session_records: { Args: { sid: string }; Returns: undefined };
+      save_template: { Args: { payload: Json }; Returns: string };
+      delete_exercise: { Args: { eid: string }; Returns: string };
     };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };

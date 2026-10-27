@@ -1,16 +1,26 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { IconPlus } from "@/components/icons";
+import { buttonClass } from "@/components/ui/button";
 import { requireProfile } from "@/lib/supabase/server";
 import { StartWorkoutButton } from "../start-workout-button";
 import { FreestyleButton } from "./freestyle-button";
 
 export const metadata: Metadata = { title: "Train" };
 
+/** "3 × 10", or "3 sets · 12/10/8" when reps differ between sets. */
+function setSummary(sets: { position: number; target_reps: number | null }[]) {
+  const reps = [...sets].sort((a, b) => a.position - b.position).map((s) => s.target_reps);
+  if (reps.every((r) => r === reps[0])) return `${reps.length} × ${reps[0] ?? "—"}`;
+  return `${reps.length} sets · ${reps.map((r) => r ?? "—").join("/")}`;
+}
+
 export default async function TrainPage() {
   const { supabase, userId } = await requireProfile();
   const { data: templates, error } = await supabase
     .from("workout_templates")
     .select(
-      "id, name, focus, est_minutes, template_exercises(position, rest_seconds, exercise:exercises(name), template_sets(target_reps))",
+      "id, name, focus, est_minutes, template_exercises(position, rest_seconds, exercise:exercises(name), template_sets(position, target_reps))",
     )
     .is("archived_at", null)
     .order("position");
@@ -25,11 +35,24 @@ export default async function TrainPage() {
             Your routines. Starting one copies it into a session, so later edits never rewrite history.
           </p>
         </div>
-        <FreestyleButton uid={userId} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href="/train/exercises" className={buttonClass({ variant: "ghost" })}>
+            Exercises
+          </Link>
+          <FreestyleButton uid={userId} />
+          <Link href="/train/new" className={buttonClass()}>
+            <IconPlus /> New routine
+          </Link>
+        </div>
       </header>
 
       {templates.length === 0 ? (
-        <p className="mt-12 border-t border-line pt-6 text-ink-3">No routines yet.</p>
+        <div className="mt-12 border-t border-line pt-6">
+          <p className="text-ink-3">No routines yet. Build one from any exercises, sets and reps you like.</p>
+          <Link href="/train/new" className={buttonClass({ variant: "secondary", className: "mt-4" })}>
+            <IconPlus /> Create a routine
+          </Link>
+        </div>
       ) : (
         <ol className="mt-12 border-t border-ink/80">
           {templates.map((t, n) => {
@@ -52,20 +75,26 @@ export default async function TrainPage() {
                     <li key={i} className="flex justify-between gap-4 border-t border-line py-2 first:border-t-0 first:pt-0">
                       <span className="text-ink-2">{te.exercise.name}</span>
                       <span className="num text-ink-3">
-                        {te.template_sets.length} × {te.template_sets[0]?.target_reps ?? "—"}
+                        {setSummary(te.template_sets)}
                       </span>
                     </li>
                   ))}
                 </ol>
-                <div className="md:pt-1">
+                <div className="flex items-start gap-2 md:flex-col md:items-stretch md:pt-1">
                   <StartWorkoutButton uid={userId} templateId={t.id} templateName={t.name} variant="secondary" label="Start" />
+                  <Link
+                    href={`/train/${t.id}/edit`}
+                    className={buttonClass({ variant: "ghost", size: "lg" })}
+                    aria-label={`Edit ${t.name}`}
+                  >
+                    Edit
+                  </Link>
                 </div>
               </li>
             );
           })}
         </ol>
       )}
-      <p className="mt-8 text-sm text-ink-3">Editing routines arrives with the exercise library in the next milestone.</p>
     </main>
   );
 }
