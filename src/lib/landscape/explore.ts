@@ -5,6 +5,7 @@
 
 import { addDays, dayKey, weekStart } from "@/lib/dates";
 import type { LandscapeSession } from "./terrain";
+import type { WorldSession } from "./world";
 
 export type RecordKind = "heaviest_weight" | "most_reps" | "estimated_1rm";
 
@@ -237,10 +238,56 @@ export type RegionSummary = {
   recent: { session: ExploreSession; topSet: { exercise: string; weight: number | null; reps: number | null } | null; record: boolean }[];
   /** measured records in this routine, newest first */
   prs: { session: ExploreSession; record: ExploreRecord; exerciseName: string }[];
+  /** the routine's main lift, climbing: each step a new best weight, first session to today's PR */
+  trail: LiftTrail | null;
 };
 
+export type LiftTrail = {
+  exerciseName: string;
+  steps: { weight: number; reps: number | null; endedAt: string; sessionId: string }[];
+};
+
+type LiftSession = Pick<WorldSession, "id" | "endedAt" | "lifts">;
+
+/** A session's heaviest completed set per weighted exercise, in the form trails are built from. */
+export function sessionLifts(s: ExploreSession): LiftSession {
+  return {
+    id: s.id,
+    endedAt: s.endedAt,
+    lifts: s.exercises.flatMap((e) => {
+      let best: ExploreSet | null = null;
+      for (const x of e.sets) if (x.completed && (x.weight ?? 0) > (best?.weight ?? 0)) best = x;
+      return best?.weight ? [{ exerciseId: e.exerciseId, name: e.name, weight: best.weight, reps: best.reps }] : [];
+    }),
+  };
+}
+
+/**
+ * The climb of a routine's main lift (the weighted exercise it trains most): the first session's
+ * best set, then every session that beat the best so far. Null when there is no climb to show.
+ */
+export function liftTrail(sessions: LiftSession[]): LiftTrail | null {
+  const ordered = [...sessions].sort((a, b) => a.endedAt.localeCompare(b.endedAt));
+  const seen = new Map<string, { name: string; sessions: number; top: number }>();
+  for (const s of ordered)
+    for (const l of s.lifts ?? []) {
+      const c = seen.get(l.exerciseId) ?? { name: l.name, sessions: 0, top: 0 };
+      c.sessions++;
+      c.top = Math.max(c.top, l.weight);
+      seen.set(l.exerciseId, c);
+    }
+  const main = [...seen.entries()].sort((a, b) => b[1].sessions - a[1].sessions || b[1].top - a[1].top)[0];
+  if (!main) return null;
+  const steps: LiftTrail["steps"] = [];
+  for (const s of ordered)
+    for (const l of s.lifts ?? [])
+      if (l.exerciseId === main[0] && l.weight > (steps.at(-1)?.weight ?? 0))
+        steps.push({ weight: l.weight, reps: l.reps, endedAt: s.endedAt, sessionId: s.id });
+  return steps.length >= 2 ? { exerciseName: main[1].name, steps } : null;
+}
+
 /** Factual per-routine figures for the region callouts and panel. */
-export function regionSummaries(sessions: ExploreSession[]): RegionSummary[] {
+export function regionSummaries(sessions: ExploreSession[], history?: WorldSession[]): RegionSummary[] {
   const groups = new Map<string, ExploreSession[]>();
   for (const s of sessions) {
     const k = s.templateId ?? `name:${s.templateName}`;
@@ -273,6 +320,8 @@ export function regionSummaries(sessions: ExploreSession[]): RegionSummary[] {
       key,
       name: ordered[0].templateName,
       prs,
+      // the trail runs over the whole history when it's known, so its foot is the very first session
+      trail: liftTrail(history ? history.filter((h) => h.templateKey === key) : ordered.map(sessionLifts)),
       workouts: list.length,
       records: list.reduce((n, s) => n + achievedRecords(s).length, 0),
       volumeTrend: third >= 2 && early > 0 ? Math.round(((late - early) / early) * 100) : null,

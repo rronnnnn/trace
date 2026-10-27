@@ -35,6 +35,8 @@ export type WorldSession = {
   sets: number;
   /** measured, non-baseline personal records set in this session */
   records: number;
+  /** the heaviest completed set of each weighted exercise in it (progress trails) */
+  lifts?: { exerciseId: string; name: string; weight: number; reps: number | null }[];
 };
 
 export type RegionGrowth = {
@@ -192,8 +194,10 @@ export function buildWorld({
   // accumulated effort per region and cell (each session only touches its own neighbourhood)
   const n = cols * rows;
   const effortGrid = bands.map(() => new Float32Array(n));
-  const r2 = SIGMA * SIGMA;
-  const reach = SIGMA * 3.2;
+  // a cone, not a bell: ln(1 + A·e^(−d/σ)) ≈ ln A − d/σ, so the log turns each range into straight
+  // flanks meeting at a ridge (a bell would flatten into a mesa under the log)
+  const sc = SIGMA * 1.1;
+  const reach = sc * 6;
   for (const p of placedList) {
     const grid = effortGrid[p.region];
     const i0 = Math.max(0, Math.floor((p.x - reach / aspect) * (cols - 1)));
@@ -205,7 +209,7 @@ export function buildWorld({
       for (let i = i0; i <= i1; i++) {
         const dx = (i / (cols - 1) - p.x) * aspect;
         const d2 = dx * dx + dy * dy;
-        grid[j * cols + i] += p.effort * Math.exp(-d2 / (2 * r2));
+        grid[j * cols + i] += p.effort * Math.exp(-Math.sqrt(d2) / sc);
       }
     }
   }
@@ -232,9 +236,13 @@ export function buildWorld({
         const e = effortGrid[r][k];
         if (e <= 0.0005) continue;
         const relief = heightFor(e);
-        // crags and spurs appear as a range rises; low ground stays smooth
+        // crags, spurs and gullies appear as a range rises (low ground stays calm): a broad ridged
+        // layer for the arêtes, a fine one for broken rock. Multipliers stay positive, so a vertex
+        // still only ever rises as effort grows.
+        const rise = Math.min(1, relief / 0.2);
         const crag = ridged(s + 1 + r * 13, nx * 9, ny * 6.5);
-        const shaped = relief * (0.8 + 0.45 * crag * Math.min(1, relief / 0.25));
+        const grit = ridged(s + 5 + r * 13, nx * 27, ny * 19);
+        const shaped = relief * (0.5 + (1.05 * crag + 0.55 * grit) * rise);
         h += shaped;
         if (shaped > top) {
           top = shaped;

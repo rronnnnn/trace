@@ -8,7 +8,7 @@ import type { WorldSession } from "./world";
 export async function loadWorldHistory(supabase: SupabaseClient<Database>): Promise<WorldSession[]> {
   const { data, error } = await supabase
     .from("workout_sessions")
-    .select("id, template_id, template_name, ended_at, total_volume, completed_sets, personal_records(kind, is_baseline)")
+    .select("id, template_id, template_name, ended_at, total_volume, completed_sets, personal_records(kind, is_baseline), session_exercises(exercise_id, exercise_name, session_sets(weight, reps, completed))")
     .order("ended_at")
     .limit(5000);
   if (error) throw error;
@@ -20,5 +20,13 @@ export async function loadWorldHistory(supabase: SupabaseClient<Database>): Prom
     volume: Number(s.total_volume),
     sets: s.completed_sets,
     records: s.personal_records.filter((r) => !r.is_baseline && r.kind !== "estimated_1rm").length,
+    lifts: s.session_exercises.flatMap((e) => {
+      let best: { weight: number; reps: number | null } | null = null;
+      for (const x of e.session_sets) {
+        const w = Number(x.weight ?? 0);
+        if (x.completed && w > (best?.weight ?? 0)) best = { weight: w, reps: x.reps };
+      }
+      return best ? [{ exerciseId: e.exercise_id, name: e.exercise_name, ...best }] : [];
+    }),
   }));
 }

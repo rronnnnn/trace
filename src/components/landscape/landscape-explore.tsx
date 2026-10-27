@@ -196,14 +196,14 @@ export function LandscapeExplore({
   const onSelectSession = useCallback((l: Landmark) => setSelected({ kind: "session", id: l.session.id }), [setSelected]);
   const onSelectRest = useCallback((span: RestSpan) => setSelected({ kind: "rest", span }), [setSelected]);
   const onSelectRegion = useCallback((key: string) => setSelected({ kind: "region", key }), [setSelected]);
-  const regions = useMemo(() => regionSummaries(sessions), [sessions]);
+  const regions = useMemo(() => regionSummaries(sessions, history), [sessions, history]);
   // a range with no sessions in this period still has a panel (its all-time facts)
   const selectedRegion: RegionSummary | undefined =
     selected?.kind === "region"
       ? (regions.find((r) => r.key === selected.key) ??
         (() => {
           const w = terrain?.regions.find((r) => r.key === selected.key);
-          return w ? { key: w.key, name: w.label, workouts: 0, records: 0, volumeTrend: null, recent: [], prs: [] } : undefined;
+          return w ? { key: w.key, name: w.label, workouts: 0, records: 0, volumeTrend: null, recent: [], prs: [], trail: null } : undefined;
         })())
       : undefined;
   const allTime = selected?.kind === "region" ? terrain?.regions.find((r) => r.key === selected.key) : undefined;

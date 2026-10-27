@@ -10,7 +10,7 @@ import { parseColor, type RGB } from "@/lib/landscape/relief";
 import type { RestSpan } from "@/lib/landscape/rest";
 import type { Landmark } from "@/lib/landscape/terrain";
 import type { World } from "@/lib/landscape/world";
-import { formatShortDate, formatVolume, plural } from "@/lib/format";
+import { formatShortDate, formatVolume, formatWeight, plural } from "@/lib/format";
 
 export type Terrain3DHandle = { zoomIn: () => void; zoomOut: () => void; reset: () => void; rotate: (radians: number) => void };
 
@@ -229,7 +229,13 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     geo.computeVertexNormals();
 
     const regionUniforms = { uHover: { value: -1 }, uSelected: { value: -1 }, uSage: { value: sage } };
-    const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, roughness: 0.84, metalness: 0 });
+    const terrainMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      transparent: true,
+      roughness: 0.9,
+      metalness: 0,
+      flatShading: true, // faceted rock: every crag and gully reads as an edge
+    });
     terrainMat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, regionUniforms);
       shader.vertexShader = shader.vertexShader
@@ -262,7 +268,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     plain.receiveShadow = true;
     scene.add(plain);
 
-    // ── contours: fine, many, sage-tinted; every fifth a little stronger ──────
+    // ── contours: dense, sage-tinted; every fifth a little stronger ───────────
     const cc = 200;
     const cr = Math.round((cc * SIZE_Z) / SIZE_X);
     // traced from the final surface (after the river's carve), so lines follow what you see
@@ -271,9 +277,9 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     // lines fade out with the terrain toward the rim (per-vertex alpha), never a hard cut
     const contourColor = cssColor("--contour-index", [94, 90, 80]).lerp(sage, 0.55);
     const lineSet = (opacity: number) => ({ pos: [] as number[], col: [] as number[], opacity });
-    const fine = lineSet(dark ? 0.2 : 0.2);
-    const index = lineSet(dark ? 0.4 : 0.36);
-    for (const c of contourChains(contourField, cc, cr, 1, 1, evenLevels(48, 0.015, 1.25), 5)) {
+    const fine = lineSet(dark ? 0.26 : 0.24);
+    const index = lineSet(dark ? 0.5 : 0.46);
+    for (const c of contourChains(contourField, cc, cr, 1, 1, evenLevels(84, 0.012, 1.3), 5)) {
       const set = c.index ? index : fine;
       for (const chain of c.chains)
         for (let i = 0; i < chain.length - 1; i++) {
@@ -538,6 +544,13 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         ? `${plural(summary.workouts, "workout")} · ${plural(summary.records, "PR")}`
         : `${plural(region.sessions, "workout")} in all`;
       text.append(title, stat);
+      const best = summary?.trail?.steps.at(-1);
+      if (best) {
+        const pr = document.createElement("span");
+        pr.className = "num block whitespace-nowrap text-[11px] font-medium leading-tight text-[var(--sage-deep)]";
+        pr.textContent = `${summary!.trail!.exerciseName} ${formatWeight(best.weight)} ${unit}`;
+        text.append(pr);
+      }
       btn.append(line, text);
       btn.setAttribute("aria-label", `${top.session.label}: ${stat.textContent}`);
       btn.style.textShadow = "0 0 8px var(--paper), 0 0 3px var(--paper)";
@@ -548,6 +561,76 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       btn.addEventListener("pointerenter", () => setHoverRegion(regionOf.get(band) ?? -1));
       btn.addEventListener("pointerleave", () => setHoverRegion(-1));
       addLabel(btn, new THREE.Vector3(...toWorld(top.x, top.y, mesh.heightAt, 2.2)), () => true, band);
+    }
+
+    // ── progress trails: each range's main lift, from the first session at the foot to today's PR
+    // at the summit; every new best is a waypoint, its height on the slope its share of the climb
+    const trailGroup = new THREE.Group();
+    world.add(trailGroup);
+    const trailInk = cssColor("--ink-2", [70, 68, 62]);
+    for (const region of terrain.regions) {
+      const trail = regions.find((r) => r.key === region.key)?.trail;
+      const ri = regionOf.get(region.key) ?? -1;
+      if (!trail || ri < 0) continue;
+      // walk down from the summit, mostly downhill and a little toward the viewer, until the foot
+      const path: [number, number, number][] = [[region.peakX, region.peakY, mesh.heightAt(region.peakX, region.peakY)]];
+      const top = path[0][2];
+      const e = 0.004;
+      for (let n = 0; n < 160; n++) {
+        const [x, y, h] = path.at(-1)!;
+        let gx = (mesh.heightAt(x + e, y) - mesh.heightAt(x - e, y)) / (2 * e);
+        let gy = (mesh.heightAt(x, y + e) - mesh.heightAt(x, y - e)) / (2 * e);
+        const g = Math.hypot(gx, gy) || 1;
+        gx = -gx / g;
+        gy = -gy / g + 0.45;
+        const d = Math.hypot(gx, gy) || 1;
+        const nx = Math.min(0.94, Math.max(0.06, x + (gx / d) * 0.005));
+        const ny = Math.min(0.94, Math.max(0.06, y + (gy / d) * 0.005));
+        const nh = mesh.heightAt(nx, ny);
+        path.push([nx, ny, Math.min(h, nh)]);
+        if (nh < top * 0.14 || (nx === x && ny === y)) break;
+      }
+      path.reverse(); // foot → summit
+      const foot = path[0][2];
+      const w0 = trail.steps[0].weight;
+      const span = Math.max(1e-6, trail.steps.at(-1)!.weight - w0);
+      const at = (t: number) => {
+        const target = foot + (top - foot) * t;
+        return path.find((p) => p[2] >= target - 1e-6) ?? path.at(-1)!;
+      };
+      // the line itself, laid on the ground
+      const pts = path.map(([x, y]) => new THREE.Vector3(...toWorld(x, y, mesh.heightAt, 0.18)));
+      const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+      const line = new THREE.Line(
+        lineGeo,
+        new THREE.LineDashedMaterial({ color: trailInk, dashSize: 0.9, gapSize: 0.6, transparent: true, opacity: 0.85, depthWrite: false }),
+      );
+      line.computeLineDistances();
+      trailGroup.add(line);
+      // waypoints: label the foot and the summit always; the climb between with the region or up close
+      const shown = trail.steps.length <= 6 ? trail.steps : trail.steps.filter((_, i, a) => i % Math.ceil(a.length / 6) === 0 || i === a.length - 1);
+      shown.forEach((step, i) => {
+        const last = i === shown.length - 1;
+        const first = i === 0;
+        const [x, y] = last ? path.at(-1)! : at((step.weight - w0) / span);
+        const pos = new THREE.Vector3(...toWorld(x, y, mesh.heightAt, 0.35));
+        const dot = new THREE.Mesh(
+          new THREE.SphereGeometry(last ? 0.7 : 0.45, 12, 8),
+          new THREE.MeshBasicMaterial({ color: last ? sage : trailInk }),
+        );
+        dot.position.copy(pos);
+        trailGroup.add(dot);
+        if (last) return; // the summit callout carries today's PR
+        const tag = document.createElement("div");
+        tag.className = "num pointer-events-none whitespace-nowrap text-[10.5px] leading-tight text-ink-2";
+        tag.style.textShadow = "0 0 6px var(--paper), 0 0 2px var(--paper)";
+        tag.textContent = `${formatWeight(step.weight)} ${unit}${first ? ` · ${formatShortDate(step.endedAt, timeZone)}` : ""}`;
+        addLabel(
+          tag,
+          pos.clone().add(new THREE.Vector3(0, 1.2, 0)),
+          () => !growth && (first || distance() < CLOSE + 20 || ri === selectedRegionIndex || ri === hoverRegion),
+        );
+      });
     }
 
     const selectedLabel = document.createElement("div");
@@ -617,6 +700,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       for (const c of contourObjects) c.visible = on;
       points.visible = on;
       if (bankLines) bankLines.visible = on;
+      trailGroup.visible = on;
     };
     if (growth) showDetail(false);
     const stepGrowth = (now: number) => {

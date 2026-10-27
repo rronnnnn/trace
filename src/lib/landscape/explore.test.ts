@@ -3,6 +3,7 @@ import { BENCH, LOWER, NOW, PULLUP, S1, S3, S4, SQUAT, UPPER, sessions } from "@
 import {
   buildWindow,
   exerciseOptions,
+  liftTrail,
   exerciseStats,
   filterSessions,
   parseRange,
@@ -148,5 +149,30 @@ describe("region summaries", () => {
     const upper = regionSummaries(sessions).find((r) => r.key === UPPER)!;
     expect(upper).toMatchObject({ name: "Upper Body", workouts: 2, records: 2, volumeTrend: null });
     expect(upper.recent[0]).toMatchObject({ session: { id: S3 }, record: true, topSet: { exercise: "Bench Press", weight: 65, reps: 8 } });
+  });
+});
+
+describe("liftTrail", () => {
+  const s = (id: string, day: number, lifts: { exerciseId: string; weight: number }[]) => ({
+    id,
+    endedAt: `2026-01-${String(day).padStart(2, "0")}T18:00:00Z`,
+    lifts: lifts.map((l) => ({ ...l, name: l.exerciseId === "bench" ? "Bench Press" : "Curl", reps: 5 })),
+  });
+
+  it("climbs the main lift from the first session to today's best, one step per new best", () => {
+    const t = liftTrail([
+      s("c", 9, [{ exerciseId: "bench", weight: 60 }]),
+      s("a", 2, [{ exerciseId: "bench", weight: 30 }, { exerciseId: "curl", weight: 10 }]),
+      s("b", 5, [{ exerciseId: "bench", weight: 50 }]),
+      s("d", 12, [{ exerciseId: "bench", weight: 55 }]),
+      s("e", 15, [{ exerciseId: "bench", weight: 100 }]),
+    ]);
+    expect(t?.exerciseName).toBe("Bench Press");
+    expect(t?.steps.map((x) => x.weight)).toEqual([30, 50, 60, 100]);
+  });
+
+  it("has no trail without a climb", () => {
+    expect(liftTrail([s("a", 2, [{ exerciseId: "bench", weight: 40 }])])).toBeNull();
+    expect(liftTrail([])).toBeNull();
   });
 });
