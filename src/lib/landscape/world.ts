@@ -24,7 +24,7 @@
  */
 
 import type { RestSpan } from "./rest";
-import { carveWater, fbm, hashString, ridged, type Landmark, type LandscapeSession, type Terrain } from "./terrain";
+import { carveWater, fbm, hashString, type Landmark, type LandscapeSession, type Terrain } from "./terrain";
 
 export type WorldSession = {
   id: string;
@@ -81,6 +81,78 @@ function median(xs: number[]) {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+
+// ── rock: gradient noise (no lattice squares) and a ridged multifractal for crests and gullies ──
+function hash2(seed: number, x: number, y: number) {
+  let h = seed ^ Math.imul(x, 374761393) ^ Math.imul(y, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
+/** Perlin-style gradient noise, roughly −1…1. Smooth everywhere, no grid-aligned plateaus. */
+export function gradientNoise(seed: number, x: number, y: number) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const fx = x - xi;
+  const fy = y - yi;
+  const g = (ix: number, iy: number, dx: number, dy: number) => {
+    const a = (hash2(seed, ix, iy) & 1023) * ((Math.PI * 2) / 1024);
+    return Math.cos(a) * dx + Math.sin(a) * dy;
+  };
+  const u = fade(fx);
+  const v = fade(fy);
+  const a = g(xi, yi, fx, fy) + (g(xi + 1, yi, fx - 1, fy) - g(xi, yi, fx, fy)) * u;
+  const b = g(xi, yi + 1, fx, fy - 1) + (g(xi + 1, yi + 1, fx - 1, fy - 1) - g(xi, yi + 1, fx, fy - 1)) * u;
+  return (a + (b - a) * v) * 1.414;
+}
+
+/**
+ * Ridged multifractal (Musgrave): knife-edge crests with gullies between, detail concentrated
+ * on the high rock. Each octave is rotated, so no ridge lines up with the mesh grid. ~0…1.
+ */
+export function crags(seed: number, x: number, y: number, octaves = 4) {
+  let sum = 0;
+  let weight = 1;
+  let amp = 0.55;
+  let px = x;
+  let py = y;
+  const c = Math.cos(0.83);
+  const sn = Math.sin(0.83);
+  for (let o = 0; o < octaves; o++) {
+    let n = 1 - Math.abs(gradientNoise(seed + o * 7919, px, py));
+    n *= n;
+    n *= weight;
+    weight = Math.min(1, n * 1.8);
+    sum += n * amp;
+    amp *= o === octaves - 2 ? 0.38 : 0.5; // the finest octave stays faint: no shimmer at grid scale
+    const qx = px * c - py * sn;
+    py = (px * sn + py * c) * 1.93 + 17.1;
+    px = qx * 1.93 + 31.7;
+  }
+  return sum / 0.95;
+}
+
+type Peak = { x: number; y: number; amp: number; r: number };
+
+/** The summits along a range: fixed by the routine's spine, revealed as effort reaches them. */
+function rangePeaks(spine: Spine, key: string, seed: string, aspect: number): Peak[] {
+  const rnd = (i: number) => (hashString(`${key}:${seed}:peak:${i}`) % 100000) / 100000;
+  const count = 9;
+  const main = Math.floor(rnd(0) * 3) + 1; // the highest summit, early on the range
+  return Array.from({ length: count }, (_, i) => {
+    const u = Math.min(0.98, Math.max(0.02, 0.03 + (0.94 * i) / (count - 1) + (rnd(i * 4 + 1) - 0.5) * 0.06));
+    const [px, py, nx, ny] = spine.at(u);
+    const side = (rnd(i * 4 + 2) - 0.5) * 0.07;
+    const fromMain = Math.abs(i - main);
+    return {
+      x: px + (nx * side) / aspect,
+      y: py + ny * side,
+      amp: fromMain === 0 ? 1 : Math.max(0.42, 0.88 - 0.07 * fromMain) * (0.75 + 0.25 * rnd(i * 4 + 3)),
+      r: 0.07 + 0.05 * rnd(i * 4 + 4),
+    };
+  });
+}
+
 type Spine = { at: (u: number) => [number, number, number, number]; cx: number; cy: number };
 
 /** A routine's spine: seeded by the routine and the user, kept clear of earlier regions. */
@@ -88,10 +160,11 @@ function placeSpine(key: string, seed: string, aspect: number, taken: { cx: numb
   const rnd = (i: number) => (hashString(`${key}:${seed}:${i}`) % 100000) / 100000;
   let best = { cx: 0.5, cy: 0.5, score: -Infinity };
   for (let i = 0; i < 40; i++) {
-    const cx = 0.24 + 0.52 * rnd(i * 2);
-    const cy = 0.26 + 0.48 * rnd(i * 2 + 1);
+    // ranges cluster into one massif near the middle, not scattered islands
+    const cx = 0.34 + 0.32 * rnd(i * 2);
+    const cy = 0.34 + 0.32 * rnd(i * 2 + 1);
     const nearest = taken.length ? Math.min(...taken.map((t) => Math.hypot((t.cx - cx) * aspect, t.cy - cy))) : 1;
-    if (nearest >= 0.3) {
+    if (nearest >= 0.16) {
       best = { cx, cy, score: Infinity };
       break;
     }
@@ -166,6 +239,7 @@ export function buildWorld({
   for (const x of sessions) if (!bands.includes(x.templateKey)) bands.push(x.templateKey);
   const spines: Spine[] = [];
   for (const key of bands) spines.push(placeSpine(key, seed, aspect, spines));
+  const peaksOf = bands.map((key, r) => rangePeaks(spines[r], key, seed, aspect));
 
   // place sessions and work out their effort, in chronological order
   type Placed = { session: WorldSession; region: number; x: number; y: number; u: number; effort: number };
@@ -194,10 +268,10 @@ export function buildWorld({
   // accumulated effort per region and cell (each session only touches its own neighbourhood)
   const n = cols * rows;
   const effortGrid = bands.map(() => new Float32Array(n));
-  // a cone, not a bell: ln(1 + A·e^(−d/σ)) ≈ ln A − d/σ, so the log turns each range into straight
-  // flanks meeting at a ridge (a bell would flatten into a mesa under the log)
-  const sc = SIGMA * 1.1;
-  const reach = sc * 6;
+  // effort says how *much* mountain stands where (a broad mass); the summits and rock come from the
+  // range's fixed shape below, so a range grows taller without ever turning into a smooth dome
+  const sc = SIGMA * 1.9;
+  const reach = sc * 5;
   for (const p of placedList) {
     const grid = effortGrid[p.region];
     const i0 = Math.max(0, Math.floor((p.x - reach / aspect) * (cols - 1)));
@@ -222,6 +296,7 @@ export function buildWorld({
   const regionIndex = new Float32Array(n).fill(-1);
   const regionStrength = new Float32Array(n);
   const peaks = bands.map(() => ({ h: 0, x: 0.5, y: 0.5 }));
+  const baseField = new Float32Array(n);
   for (let j = 0; j < rows; j++) {
     const ny = j / (rows - 1);
     for (let i = 0; i < cols; i++) {
@@ -230,19 +305,37 @@ export function buildWorld({
       const base = 0.075 * fbm(s, nx * 2.1, ny * 1.6) + 0.025 * Math.sin((nx * 2.3 + ny * 1.1 + (s % 97) / 97) * Math.PI);
       let h = base;
       let lay = base;
+      baseField[k] = base;
       let top = 0;
       let topRegion = -1;
+      // distance to every range's spine: where ranges run (independent of how tall they are)
+      const spineD = spineSamples.map((samples) => {
+        let d2min = Infinity;
+        for (const [sx, sy] of samples) {
+          const dx = (nx - sx) * aspect;
+          const dy = ny - sy;
+          d2min = Math.min(d2min, dx * dx + dy * dy);
+        }
+        return Math.sqrt(d2min);
+      });
       for (let r = 0; r < bands.length; r++) {
         const e = effortGrid[r][k];
         if (e <= 0.0005) continue;
-        const relief = heightFor(e);
-        // crags, spurs and gullies appear as a range rises (low ground stays calm): a broad ridged
-        // layer for the arêtes, a fine one for broken rock. Multipliers stay positive, so a vertex
-        // still only ever rises as effort grows.
-        const rise = Math.min(1, relief / 0.2);
-        const crag = ridged(s + 1 + r * 13, nx * 9, ny * 6.5);
-        const grit = ridged(s + 5 + r * 13, nx * 27, ny * 19);
-        const shaped = relief * (0.5 + (1.05 * crag + 0.55 * grit) * rise);
+        const mass = heightFor(e);
+        // warp the ground a little so summits are irregular, never round cones
+        const wx = nx * aspect + 0.035 * gradientNoise(s + 41 + r * 13, nx * 7, ny * 7);
+        const wy = ny + 0.035 * gradientNoise(s + 43 + r * 13, nx * 7 + 9.3, ny * 7);
+        // pointed summits: concave flanks rising to a sharp tip, joined by a jagged spine
+        let summit = 0;
+        for (const p of peaksOf[r]) {
+          const t = Math.hypot(wx - p.x * aspect, wy - p.y) / p.r;
+          if (t < 1) summit = Math.max(summit, p.amp * Math.pow(1 - t, 1.7));
+        }
+        const ridge = 0.32 * Math.pow(Math.max(0, 1 - spineD[r] / 0.11), 1.4);
+        const shape = Math.max(summit, ridge);
+        const rock = crags(s + 3 + r * 13, wx * 6.5, wy * 6.5);
+        // fixed, positive multipliers: a vertex still only ever rises as effort grows
+        const shaped = mass * (2.1 * shape * (0.45 + 0.85 * rock) + 0.16 * rock);
         h += shaped;
         if (shaped > top) {
           top = shaped;
@@ -252,15 +345,7 @@ export function buildWorld({
       }
       // the layout only knows *where* ranges run (their whole spine, from the first session on),
       // never how tall they are, so the river's course doesn't move as they grow
-      for (let r = 0; r < bands.length; r++) {
-        let d2min = Infinity;
-        for (const [sx, sy] of spineSamples[r]) {
-          const dx = (nx - sx) * aspect;
-          const dy = ny - sy;
-          d2min = Math.min(d2min, dx * dx + dy * dy);
-        }
-        lay += 0.14 * Math.exp(-d2min / (2 * 0.07 * 0.07));
-      }
+      for (let r = 0; r < bands.length; r++) lay += 0.14 * Math.exp(-(spineD[r] * spineD[r]) / (2 * 0.07 * 0.07));
       field[k] = h;
       layout[k] = lay;
       if (topRegion >= 0 && top > 0.012) {
@@ -271,11 +356,14 @@ export function buildWorld({
     }
   }
 
+  const uncarved = field.slice();
   const water = carveWater(field, cols, rows, aspect, rest, timeStart, timeEnd, s, layout, 0.05);
-  // keep the lowest ground at zero after carving
+  // keep the lowest ground at zero after carving. The offset comes from the base ground alone
+  // (the carve only cuts down, by the same amount whatever stands there), so it never shifts as
+  // ranges grow and no vertex can sink.
   let min = Infinity;
-  for (const h of field) if (h < min) min = h;
-  for (let k = 0; k < n; k++) field[k] -= min;
+  for (let k = 0; k < n; k++) min = Math.min(min, baseField[k] - (uncarved[k] - field[k]));
+  for (let k = 0; k < n; k++) field[k] = Math.max(0, field[k] - min);
 
   const placed = new Map(placedList.map((p) => [p.session.id, { x: p.x, y: p.y, u: p.u }]));
   const visible = show ?? placedList.map((p) => ({ ...p.session, prCount: p.session.records }));

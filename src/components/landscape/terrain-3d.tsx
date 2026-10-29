@@ -4,7 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import * as THREE from "three";
 import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { contourChains, evenLevels, resampleField } from "@/lib/landscape/contours";
-import type { RegionSummary } from "@/lib/landscape/explore";
+import type { LiftTrail, RegionSummary } from "@/lib/landscape/explore";
 import { edgeFalloff, riverMesh, SIZE_X, SIZE_Z, terrainMesh, toWorld, type MeshPalette } from "@/lib/landscape/mesh";
 import { parseColor, type RGB } from "@/lib/landscape/relief";
 import type { RestSpan } from "@/lib/landscape/rest";
@@ -12,7 +12,7 @@ import type { Landmark } from "@/lib/landscape/terrain";
 import type { World } from "@/lib/landscape/world";
 import { formatShortDate, formatVolume, formatWeight, plural } from "@/lib/format";
 
-export type Terrain3DHandle = { zoomIn: () => void; zoomOut: () => void; reset: () => void; rotate: (radians: number) => void };
+export type Terrain3DHandle = { zoomIn: () => void; zoomOut: () => void; reset: () => void };
 
 type Props = {
   terrain: World;
@@ -37,6 +37,7 @@ const TILT_PORTRAIT = 0.78; // steadier on a tall screen: less sky, more ground
 const HOME_DISTANCE = 96;
 const ORTHO_HEIGHT = 74; // world units visible top-to-bottom in 2D at zoom 1
 const CLOSE = 52; // camera distance under which every session shows
+const MAX_TILT = 1.3; // radians from straight down: never quite to the horizon
 
 /** CSS tokens are sRGB; three.js works in linear light, so convert on the way in. */
 function cssColor(name: string, fallback: RGB): THREE.Color {
@@ -53,6 +54,48 @@ function palette(): MeshPalette {
     high: v("--terrain-high", [247, 245, 239]),
     vegetation: v("--terrain-vegetation", [180, 187, 155]),
   };
+}
+
+const MIN_STOPS = 8;
+const MAX_STOPS = 12;
+
+/**
+ * Waypoints up a range, foot to summit: `t` is the share of the climb (0 = the first session,
+ * 1 = today's best). With a lift trail, each stop is a weight level and when it was first reached;
+ * with fewer new bests than stops, the levels are spaced evenly between the first and the best.
+ * Without a lift, the stops count workouts instead.
+ */
+export function progressStops(trail: LiftTrail | null, sessions: number, unit: string, timeZone: string) {
+  const stops: { t: number; text: string }[] = [];
+  if (trail) {
+    const steps = trail.steps;
+    const w0 = steps[0].weight;
+    const span = Math.max(1e-6, steps.at(-1)!.weight - w0);
+    const withDate = (w: number, at: string, first: boolean) =>
+      `${formatWeight(w)} ${unit}${first ? ` · ${formatShortDate(at, timeZone)}` : ""}`;
+    if (steps.length >= MIN_STOPS) {
+      const every = Math.ceil(steps.length / MAX_STOPS);
+      const keep = steps.filter((_, i) => i % every === 0 || i === steps.length - 1);
+      keep.forEach((s, i) => stops.push({ t: (s.weight - w0) / span, text: withDate(s.weight, s.endedAt, i === 0) }));
+    } else {
+      for (let i = 0; i < MIN_STOPS; i++) {
+        const t = i / (MIN_STOPS - 1);
+        const level = i === MIN_STOPS - 1 ? steps.at(-1)!.weight : Math.round((w0 + span * t) * 2) / 2;
+        const reached = steps.find((s) => s.weight >= level - 1e-9) ?? steps.at(-1)!;
+        stops.push({ t, text: withDate(level, reached.endedAt, i === 0) });
+      }
+    }
+  } else if (sessions >= 2) {
+    let shown = 0;
+    for (let i = 0; i < MIN_STOPS; i++) {
+      const t = i / (MIN_STOPS - 1);
+      const n = Math.round(1 + (sessions - 1) * t);
+      // a dot for every stop; a label only where the count moves on
+      stops.push({ t, text: n > shown ? (n === 1 ? "1st workout" : plural(n, "workout")) : "" });
+      shown = n;
+    }
+  }
+  return stops;
 }
 
 /** Soft round glow for data points, drawn as screen-sized sprites. */
@@ -117,7 +160,6 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     setSelected: (id: string | null) => void;
     setRegion: (key: string | null) => void;
     zoom: (factor: number) => void;
-    rotate: (radians: number) => void;
     reset: () => void;
   };
   const api = useRef<Api | null>(null);
@@ -234,7 +276,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       transparent: true,
       roughness: 0.9,
       metalness: 0,
-      flatShading: true, // faceted rock: every crag and gully reads as an edge
+      // smooth normals: the crags are in the geometry itself; flat facets showed the mesh grid
     });
     terrainMat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, regionUniforms);
@@ -261,13 +303,6 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     ground.receiveShadow = true;
     world.add(ground);
 
-    // beyond the map: only the shadows reach the page
-    const plain = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.ShadowMaterial({ opacity: dark ? 0.35 : 0.14 }));
-    plain.rotation.x = -Math.PI / 2;
-    plain.position.set(centre.x, -0.02, centre.z);
-    plain.receiveShadow = true;
-    scene.add(plain);
-
     // ── contours: dense, sage-tinted; every fifth a little stronger ───────────
     const cc = 200;
     const cr = Math.round((cc * SIZE_Z) / SIZE_X);
@@ -277,9 +312,11 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     // lines fade out with the terrain toward the rim (per-vertex alpha), never a hard cut
     const contourColor = cssColor("--contour-index", [94, 90, 80]).lerp(sage, 0.55);
     const lineSet = (opacity: number) => ({ pos: [] as number[], col: [] as number[], opacity });
-    const fine = lineSet(dark ? 0.26 : 0.24);
-    const index = lineSet(dark ? 0.5 : 0.46);
-    for (const c of contourChains(contourField, cc, cr, 1, 1, evenLevels(84, 0.012, 1.3), 5)) {
+    // few and faint: they hint at the form without laying a net over the rock
+    const fine = lineSet(dark ? 0.12 : 0.1);
+    const index = lineSet(dark ? 0.3 : 0.26);
+    const tallest = surface.reduce((m, h) => Math.max(m, h), 0.2);
+    for (const c of contourChains(contourField, cc, cr, 1, 1, evenLevels(40, 0.02, tallest * 0.97), 5)) {
       const set = c.index ? index : fine;
       for (const chain of c.chains)
         for (let i = 0; i < chain.length - 1; i++) {
@@ -445,10 +482,9 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       c.maxDistance = homeDist;
       c.minZoom = 1;
       c.maxZoom = 7;
-      c.maxPolarAngle = 1.3;
-      // touch: one finger pans, two fingers pinch (and pan). Rotation lives on a button: pinching
-      // and turning at once is what made the gestures feel messy on phones.
-      c.touches = { ONE: THREE.TOUCH.PAN, TWO: touch || !is3D ? THREE.TOUCH.DOLLY_PAN : THREE.TOUCH.DOLLY_ROTATE };
+      c.maxPolarAngle = MAX_TILT;
+      // mouse: drag pans, right-drag turns and tilts, the wheel zooms (toward the cursor).
+      // Touch never reaches the controls: the gesture handler below owns every finger.
       c.addEventListener("change", () => {
         clampTarget(c);
         invalidate();
@@ -462,7 +498,6 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const applyFlat = () => {
       world.scale.y = 1 - 0.995 * flat;
       sun.castShadow = !touch && flat < 0.5;
-      plain.visible = flat < 0.5;
     };
 
     const setMode = (is3D: boolean) => {
@@ -563,15 +598,17 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       addLabel(btn, new THREE.Vector3(...toWorld(top.x, top.y, mesh.heightAt, 2.2)), () => true, band);
     }
 
-    // ── progress trails: each range's main lift, from the first session at the foot to today's PR
-    // at the summit; every new best is a waypoint, its height on the slope its share of the climb
+    // ── progress trails: each range's main lift, from the first session at the foot to today's best
+    // at the summit; at least eight waypoints, each standing as high on the slope as its share of
+    // the climb (the lowest is the least progress)
     const trailGroup = new THREE.Group();
     world.add(trailGroup);
     const trailInk = cssColor("--ink-2", [70, 68, 62]);
     for (const region of terrain.regions) {
-      const trail = regions.find((r) => r.key === region.key)?.trail;
+      const trail = regions.find((r) => r.key === region.key)?.trail ?? null;
       const ri = regionOf.get(region.key) ?? -1;
-      if (!trail || ri < 0) continue;
+      const stops = progressStops(trail, region.sessions, unit, timeZone);
+      if (ri < 0 || !stops.length) continue;
       // walk down from the summit, mostly downhill and a little toward the viewer, until the foot
       const path: [number, number, number][] = [[region.peakX, region.peakY, mesh.heightAt(region.peakX, region.peakY)]];
       const top = path[0][2];
@@ -592,8 +629,6 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       }
       path.reverse(); // foot → summit
       const foot = path[0][2];
-      const w0 = trail.steps[0].weight;
-      const span = Math.max(1e-6, trail.steps.at(-1)!.weight - w0);
       const at = (t: number) => {
         const target = foot + (top - foot) * t;
         return path.find((p) => p[2] >= target - 1e-6) ?? path.at(-1)!;
@@ -608,23 +643,22 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       line.computeLineDistances();
       trailGroup.add(line);
       // waypoints: label the foot and the summit always; the climb between with the region or up close
-      const shown = trail.steps.length <= 6 ? trail.steps : trail.steps.filter((_, i, a) => i % Math.ceil(a.length / 6) === 0 || i === a.length - 1);
-      shown.forEach((step, i) => {
-        const last = i === shown.length - 1;
+      stops.forEach((stop, i) => {
+        const last = i === stops.length - 1;
         const first = i === 0;
-        const [x, y] = last ? path.at(-1)! : at((step.weight - w0) / span);
+        const [x, y] = last ? path.at(-1)! : at(stop.t);
         const pos = new THREE.Vector3(...toWorld(x, y, mesh.heightAt, 0.35));
         const dot = new THREE.Mesh(
-          new THREE.SphereGeometry(last ? 0.7 : 0.45, 12, 8),
+          new THREE.SphereGeometry(last ? 0.7 : first ? 0.5 : 0.4, 12, 8),
           new THREE.MeshBasicMaterial({ color: last ? sage : trailInk }),
         );
         dot.position.copy(pos);
         trailGroup.add(dot);
-        if (last) return; // the summit callout carries today's PR
+        if (last || !stop.text) return; // the summit callout carries today's best
         const tag = document.createElement("div");
         tag.className = "num pointer-events-none whitespace-nowrap text-[10.5px] leading-tight text-ink-2";
         tag.style.textShadow = "0 0 6px var(--paper), 0 0 2px var(--paper)";
-        tag.textContent = `${formatWeight(step.weight)} ${unit}${first ? ` · ${formatShortDate(step.endedAt, timeZone)}` : ""}`;
+        tag.textContent = stop.text;
         addLabel(
           tag,
           pos.clone().add(new THREE.Vector3(0, 1.2, 0)),
@@ -730,8 +764,9 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const tick = (now: number) => {
       const grew = stepGrowth(now);
       if (grew) dirty = true;
-      const flying = fly ? fly(now) : false;
-      if (!flying) fly = null;
+      const flew = fly ? fly(now) : false;
+      if (!flew) fly = null;
+      const flying = glide() || flew;
       if (Math.abs(flat - flatTarget) > 0.001) {
         flat += (flatTarget - flat) * 0.18;
         if (Math.abs(flat - flatTarget) < 0.002) flat = flatTarget;
@@ -850,18 +885,6 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       });
     };
 
-    const rotate = (radians: number) => {
-      if (camera !== persp) return;
-      const c = ctl();
-      const sph = new THREE.Spherical().setFromVector3(persp.position.clone().sub(c.target));
-      const from = sph.theta;
-      animate((e) => {
-        persp.position.copy(c.target).add(new THREE.Vector3().setFromSphericalCoords(sph.radius, sph.phi, from + radians * e));
-        persp.lookAt(c.target);
-        changed();
-      }, 420);
-    };
-
     // ── picking: points first, then water, then a region ────────────────────
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
@@ -900,14 +923,8 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       return null;
     };
 
-    let down: { x: number; y: number } | null = null;
-    const onDown = (e: PointerEvent) => {
-      down = { x: e.clientX, y: e.clientY };
-    };
-    const onUp = (e: PointerEvent) => {
-      if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return void (down = null);
-      down = null;
-      const hit = pickAt(e.clientX, e.clientY);
+    const selectAt = (clientX: number, clientY: number) => {
+      const hit = pickAt(clientX, clientY);
       if (hit?.kind === "session") {
         callbacks.current.onSelectSession(marks[hit.index]);
         flyToPoint(base[hit.index]);
@@ -915,6 +932,168 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       else if (hit?.kind === "region") callbacks.current.onSelectRegion(hit.key);
       else callbacks.current.onClearSelection();
     };
+    let down: { x: number; y: number } | null = null;
+    const onDown = (e: PointerEvent) => {
+      down = { x: e.clientX, y: e.clientY };
+    };
+    const onUp = (e: PointerEvent) => {
+      if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return void (down = null);
+      down = null;
+      selectAt(e.clientX, e.clientY);
+    };
+
+    // ── touch: one finger pans (the ground stays under it), two fingers pinch to zoom and twist
+    // to turn, both at once; two fingers sliding up or down together tilt. A tap selects.
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const groundAt = (clientX: number, clientY: number) => {
+      const r = renderer.domElement.getBoundingClientRect();
+      ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+      camera.updateMatrixWorld();
+      raycaster.setFromCamera(ndc, camera);
+      return raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3());
+    };
+    const shift = (d: THREE.Vector3) => {
+      d.y = 0;
+      ctl().target.add(d);
+      camera.position.add(d);
+    };
+    const settle = () => {
+      if (camera === persp) persp.lookAt(ctl().target);
+      else ortho.position.set(ctl().target.x, 300, ctl().target.z);
+      changed();
+    };
+    /** move the camera so that the ground point `from` ends up under the screen point (x, y) */
+    const keepUnder = (from: THREE.Vector3 | null, x: number, y: number) => {
+      const to = groundAt(x, y);
+      if (from && to) shift(from.clone().sub(to));
+    };
+    const fingers = new Map<number, { x: number; y: number }>();
+    let tap: { x: number; y: number; t: number } | null = null;
+    let twoMode: "pending" | "map" | "tilt" = "pending";
+    let twoTravel = { a: 0, b: 0, ay: 0, by: 0, pinch: 0 };
+    const coast = new THREE.Vector3();
+    let lastPan = 0;
+    const pair = () => {
+      const [a, b] = [...fingers.values()];
+      return { a, b, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, dist: Math.hypot(b.x - a.x, b.y - a.y), angle: Math.atan2(b.y - a.y, b.x - a.x) };
+    };
+    const onTouchDown = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      e.stopPropagation(); // the map controls and the mouse picking never see touches
+      el.setPointerCapture?.(e.pointerId);
+      fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      coast.set(0, 0, 0);
+      fly = null;
+      tap = fingers.size === 1 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
+      if (fingers.size === 2) {
+        twoMode = "pending";
+        twoTravel = { a: 0, b: 0, ay: 0, by: 0, pinch: pair().dist };
+      }
+    };
+    const onTouchMove = (e: PointerEvent) => {
+      if (e.pointerType !== "touch" || !fingers.has(e.pointerId)) return;
+      e.stopPropagation();
+      const prev = fingers.get(e.pointerId)!;
+      if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 8) tap = null;
+      if (fingers.size === 1) {
+        const from = groundAt(prev.x, prev.y);
+        fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (tap) return;
+        const before = ctl().target.clone();
+        keepUnder(from, e.clientX, e.clientY);
+        // remember the motion, so a flick keeps gliding after the finger lifts
+        const now = performance.now();
+        const moved = ctl().target.clone().sub(before);
+        coast.lerp(moved.divideScalar(Math.max(8, now - lastPan) / 16), 0.5);
+        lastPan = now;
+        settle();
+        return;
+      }
+      if (fingers.size !== 2) return void fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const p0 = pair();
+      fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const p1 = pair();
+      if (twoMode === "pending") {
+        // decide once, from the first few pixels: both fingers sliding the same way vertically,
+        // side by side, is a tilt; anything else is pinch / twist / pan together
+        const first = e.pointerId === [...fingers.keys()][0];
+        const dx = Math.abs(e.clientX - prev.x);
+        const dy = e.clientY - prev.y;
+        if (first) Object.assign(twoTravel, { a: twoTravel.a + dx, ay: twoTravel.ay + dy });
+        else Object.assign(twoTravel, { b: twoTravel.b + dx, by: twoTravel.by + dy });
+        const t = twoTravel;
+        const travelled = Math.max(t.a, t.b, Math.abs(t.ay), Math.abs(t.by), Math.abs(p1.dist - t.pinch));
+        if (travelled < 10) return;
+        const tilt =
+          camera === persp &&
+          Math.abs(t.ay) > 6 &&
+          Math.abs(t.by) > 6 &&
+          Math.sign(t.ay) === Math.sign(t.by) &&
+          Math.abs(t.ay) > 2 * t.a &&
+          Math.abs(t.by) > 2 * t.b &&
+          Math.abs(p1.dist - t.pinch) < 12 &&
+          Math.abs(p1.b.x - p1.a.x) > Math.abs(p1.b.y - p1.a.y);
+        twoMode = tilt ? "tilt" : "map";
+      }
+      if (twoMode === "tilt") {
+        if (camera !== persp) return;
+        const c = ctl();
+        const sph = new THREE.Spherical().setFromVector3(persp.position.clone().sub(c.target));
+        sph.phi = Math.min(MAX_TILT, Math.max(0.12, sph.phi - (p1.my - p0.my) * 0.006));
+        persp.position.copy(c.target).add(new THREE.Vector3().setFromSpherical(sph));
+        settle();
+        return;
+      }
+      const anchor = groundAt(p0.mx, p0.my);
+      if (!anchor) return;
+      const c = ctl();
+      // pinch: zoom about the point between the fingers
+      const ratio = p1.dist / Math.max(1, p0.dist);
+      if (camera === persp) {
+        const off = persp.position.clone().sub(c.target);
+        const d = Math.min(homeDist, Math.max(14, off.length() / ratio));
+        const k = d / off.length();
+        c.target.sub(anchor).multiplyScalar(k).add(anchor);
+        persp.position.sub(anchor).multiplyScalar(k).add(anchor);
+        // twist: turn the world about that same point
+        const turn = p1.angle - p0.angle;
+        const da = Math.atan2(Math.sin(turn), Math.cos(turn));
+        if (Math.abs(da) > 1e-4) {
+          const axis = new THREE.Vector3(0, 1, 0);
+          c.target.sub(anchor).applyAxisAngle(axis, da).add(anchor);
+          persp.position.sub(anchor).applyAxisAngle(axis, da).add(anchor);
+        }
+        persp.lookAt(c.target);
+      } else {
+        ortho.zoom = Math.min(7, Math.max(1, ortho.zoom * ratio));
+        ortho.updateProjectionMatrix();
+      }
+      // and the ground under the fingers follows them (pan)
+      keepUnder(anchor, p1.mx, p1.my);
+      settle();
+    };
+    const onTouchUp = (e: PointerEvent) => {
+      if (e.pointerType !== "touch" || !fingers.has(e.pointerId)) return;
+      e.stopPropagation();
+      fingers.delete(e.pointerId);
+      if (e.type === "pointerup" && tap && performance.now() - tap.t < 450 && fingers.size === 0) selectAt(e.clientX, e.clientY);
+      tap = null;
+      if (fingers.size === 1) twoMode = "pending";
+      // a flick glides on and slows; a slow lift stops where it is
+      if (fingers.size > 0 || performance.now() - lastPan > 80 || coast.length() < 0.05) coast.set(0, 0, 0);
+    };
+    const glide = () => {
+      if (fingers.size || coast.lengthSq() < 1e-4) return false;
+      shift(coast.clone());
+      coast.multiplyScalar(0.92);
+      settle();
+      return true;
+    };
+    el.style.touchAction = "none";
+    el.addEventListener("pointerdown", onTouchDown, true);
+    el.addEventListener("pointermove", onTouchMove, true);
+    el.addEventListener("pointerup", onTouchUp, true);
+    el.addEventListener("pointercancel", onTouchUp, true);
     // hover (mouse only; touch selects on tap): tooltip on points, region highlight on ground
     let hoverFrame = 0;
     const onMove = (e: PointerEvent) => {
@@ -984,7 +1163,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     applyFlat();
     setSelected(initial.current.selectedId);
     setRegion(initial.current.selectedRegion);
-    api.current = { setMode, zoom, reset, rotate, setSelected, setRegion };
+    api.current = { setMode, zoom, reset, setSelected, setRegion };
     raf = requestAnimationFrame(tick);
 
     return () => {
@@ -995,6 +1174,10 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       renderer.domElement.removeEventListener("pointerup", onUp);
       renderer.domElement.removeEventListener("pointermove", onMove);
       renderer.domElement.removeEventListener("pointerleave", onLeave);
+      el.removeEventListener("pointerdown", onTouchDown, true);
+      el.removeEventListener("pointermove", onTouchMove, true);
+      el.removeEventListener("pointerup", onTouchUp, true);
+      el.removeEventListener("pointercancel", onTouchUp, true);
       controls?.dispose();
       scene.traverse((o) => {
         const m = o as THREE.Mesh;
@@ -1017,7 +1200,6 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     zoomIn: () => api.current?.zoom(1.6),
     zoomOut: () => api.current?.zoom(1 / 1.6),
     reset: () => api.current?.reset(),
-    rotate: (radians: number) => api.current?.rotate(radians),
   }));
 
   return (

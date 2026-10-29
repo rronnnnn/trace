@@ -50,28 +50,42 @@ export function terrainMesh(
   const positions = new Float32Array(cols * rows * 3);
   const colors = new Float32Array(cols * rows * 3);
   const heights = new Float32Array(cols * rows);
+  // colour by height relative to the tallest summit, so a grown world keeps its whole palette
+  let top = 1;
+  for (const v of field) if (v > top) top = v;
 
   for (let j = 0; j < rows; j++) {
     const ny = j / (rows - 1);
     for (let i = 0; i < cols; i++) {
       const nx = i / (cols - 1);
       const k = j * cols + i;
-      const h = field[k] * edgeFalloff(nx, ny);
+      // ease to the plain well inside the map, so it never reads as a raised slab
+      const h = field[k] * edgeFalloff(nx, ny, 0.2);
       heights[k] = h * heightScale;
       positions[k * 3] = nx * SIZE_X;
       positions[k * 3 + 1] = heights[k];
       positions[k * 3 + 2] = ny * SIZE_Z;
 
-      // elevation tint: dark valleys, pale summits; vegetation on low gentle ground
+      // elevation tint: dark valleys, pale summits; bare rock on steep faces, snow on high
+      // gentle ground, vegetation on low gentle ground
       const at = (x: number, y: number) => field[Math.min(rows - 1, Math.max(0, y)) * cols + Math.min(cols - 1, Math.max(0, x))];
       const slope = Math.hypot(at(i + 1, j) - at(i - 1, j), at(i, j + 1) - at(i, j - 1)) * (cols / 26);
-      const t = h < 0.5 ? h / 0.5 : (h - 0.5) / 0.5;
-      const a = h < 0.5 ? palette.low : palette.mid;
-      const b = h < 0.5 ? palette.mid : palette.high;
+      // the real steepness of the rendered face (rise over run, in world units)
+      const steep = (slope / (cols / 26)) * heightScale * ((cols - 1) / (2 * SIZE_X));
+      const hn = Math.min(1, Math.max(0, h / top));
+      const t = hn < 0.45 ? hn / 0.45 : (hn - 0.45) / 0.55;
+      const a = hn < 0.45 ? palette.low : palette.mid;
+      const b = hn < 0.45 ? palette.mid : palette.high;
       const veg = 0.5 * vegetationAt(h, slope);
+      const rockiness = 0.62 * smoothstep(0.55, 1.5, steep) * smoothstep(0.04, 0.2, hn);
+      const snow = 0.7 * smoothstep(0.6, 0.85, hn) * (1 - smoothstep(0.7, 1.6, steep));
       for (let c = 0; c < 3; c++) {
-        const base = a[c] + (b[c] - a[c]) * t;
-        colors[k * 3 + c] = (base + (palette.vegetation[c] - base) * veg) / 255;
+        let v = a[c] + (b[c] - a[c]) * t;
+        v += (palette.vegetation[c] - v) * veg;
+        const rock = (palette.low[c] * 0.6 + palette.mid[c] * 0.4) * 0.8;
+        v += (rock - v) * rockiness;
+        v += (palette.high[c] - v) * snow;
+        colors[k * 3 + c] = v / 255;
       }
     }
   }

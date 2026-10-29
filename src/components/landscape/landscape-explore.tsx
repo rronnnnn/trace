@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { IconArrowLeft, IconPlus } from "@/components/icons";
+import { IconArrowLeft } from "@/components/icons";
 import {
   RANGES,
   regionSummaries,
@@ -126,7 +126,7 @@ export function LandscapeExplore({
   const latest = history.length ? history.reduce((m, h) => (h.endedAt > m ? h.endedAt : m), history[0].endedAt) : null;
 
   const worldOpts = useMemo(() => {
-    const cols = touch ? 160 : 220;
+    const cols = touch ? 200 : 260; // fine enough that the rock never shows the grid
     return {
       history,
       seed,
@@ -322,72 +322,43 @@ export function LandscapeExplore({
           </div>
         ) : null}
 
-        {/* controls: one compact bar on touch screens (hidden under an open sheet), a column on desktop */}
+        {/* the camera is all gestures; the only control is the view (3D / flat map) */}
         <div
           className={cn(
-            "absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+14px)] z-10 flex justify-center px-3",
-            "roomy:inset-x-auto roomy:right-5 roomy:bottom-[calc(env(safe-area-inset-bottom)+16px)] roomy:px-0",
+            "absolute bottom-[calc(env(safe-area-inset-bottom)+14px)] right-3 z-10 roomy:right-5 roomy:bottom-[calc(env(safe-area-inset-bottom)+16px)]",
             selected && "compact:hidden",
           )}
         >
-          <div className="flex items-center gap-1 rounded-lg border border-line-strong bg-surface/92 p-1 shadow-[var(--shadow)] backdrop-blur roomy:flex-col roomy:items-end roomy:gap-2 roomy:border-0 roomy:bg-transparent roomy:p-0 roomy:shadow-none roomy:backdrop-blur-none">
-            <div className="flex overflow-hidden roomy:flex-col roomy:rounded-md roomy:border roomy:border-line-strong roomy:bg-surface/90 roomy:shadow-[var(--shadow)] roomy:backdrop-blur">
-              <MapButton
-                label="Zoom out"
-                onClick={() => scene.current?.zoomOut()}
-                className="compact:order-first roomy:order-last roomy:border-t roomy:border-line"
+          <div
+            role="radiogroup"
+            aria-label="View"
+            className="flex overflow-hidden rounded-md border border-line-strong bg-surface/90 text-[12px] font-medium shadow-[var(--shadow)] backdrop-blur"
+          >
+            {(["3D", "2D"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={(m === "3D") === tilted}
+                onClick={() => setTilted(m === "3D")}
+                className={cn(
+                  "h-10 px-3.5 transition-colors roomy:h-9",
+                  (m === "3D") === tilted ? "bg-ink text-paper" : "text-ink-2 hover:text-ink",
+                )}
               >
-                <svg width="14" height="14" viewBox="0 0 14 14" stroke="currentColor" strokeWidth="1.4" aria-hidden>
-                  <path d="M2.5 7h9" />
-                </svg>
-              </MapButton>
-              <MapButton label="Zoom in" onClick={() => scene.current?.zoomIn()}>
-                <IconPlus />
-              </MapButton>
-            </div>
-            {tilted ? (
-              <div className="flex roomy:hidden">
-                <MapButton label="Turn left" onClick={() => scene.current?.rotate(-Math.PI / 4)}>
-                  <IconTurn />
-                </MapButton>
-                <MapButton label="Turn right" onClick={() => scene.current?.rotate(Math.PI / 4)}>
-                  <IconTurn flip />
-                </MapButton>
-              </div>
-            ) : null}
-            <div
-              role="radiogroup"
-              aria-label="View"
-              className="flex overflow-hidden rounded-md text-[12px] font-medium roomy:border roomy:border-line-strong roomy:bg-surface/90 roomy:shadow-[var(--shadow)] roomy:backdrop-blur"
-            >
-              {(["3D", "2D"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  role="radio"
-                  aria-checked={(m === "3D") === tilted}
-                  onClick={() => setTilted(m === "3D")}
-                  className={cn(
-                    "h-11 px-3 transition-colors roomy:h-9",
-                    (m === "3D") === tilted ? "rounded-md bg-ink text-paper roomy:rounded-none" : "text-ink-2 hover:text-ink",
-                  )}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => scene.current?.reset()}
-              aria-label="Reset view"
-              className="h-11 rounded-md px-3 text-[12px] text-ink-2 hover:text-ink roomy:h-9 roomy:border roomy:border-line-strong roomy:bg-surface/90 roomy:shadow-[var(--shadow)] roomy:backdrop-blur"
-            >
-              Reset
-            </button>
+                {m}
+              </button>
+            ))}
           </div>
         </div>
-        <p className="pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom)+16px)] left-3 z-10 hidden rounded-md bg-surface/80 px-2.5 py-1.5 text-[11px] text-ink-3 backdrop-blur roomy:left-5 roomy:block">
-          Drag to move · scroll or pinch to zoom · right-drag or two fingers to turn
+        <p
+          className={cn(
+            "pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom)+16px)] left-3 z-10 max-w-[calc(100%-120px)] rounded-md bg-surface/80 px-2.5 py-1.5 text-[11px] leading-snug text-ink-3 backdrop-blur roomy:left-5",
+            selected && "compact:hidden",
+          )}
+        >
+          <span className="roomy:hidden">Drag to move · pinch to zoom · twist to turn · two fingers up or down to tilt</span>
+          <span className="hidden roomy:inline">Drag to move · scroll to zoom · right-drag to turn and tilt</span>
         </p>
 
         {/* details: a bottom sheet on phones, a side panel on desktop */}
@@ -433,50 +404,7 @@ export function LandscapeExplore({
   );
 }
 
-function MapButton({
-  children,
-  label,
-  onClick,
-  className,
-}: {
-  children: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className={cn(
-        "flex size-11 items-center justify-center rounded-md text-ink-2 hover:bg-sunken hover:text-ink roomy:size-10 roomy:rounded-none",
-        className,
-      )}
-    >
-      {children}
-    </button>
-  );
-}
 
-function IconTurn({ flip }: { flip?: boolean }) {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.4"
-      aria-hidden
-      style={flip ? { transform: "scaleX(-1)" } : undefined}
-    >
-      <path d="M3.5 6.5A5 5 0 1 1 3 9.5" strokeLinecap="round" />
-      <path d="M3.5 2.8v3.7h3.7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 function RegionDetail({
   region: r,
