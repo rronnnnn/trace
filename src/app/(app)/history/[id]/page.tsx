@@ -18,7 +18,7 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
   const { data: s, error } = await supabase
     .from("workout_sessions")
     .select(
-      "id, template_name, started_at, ended_at, notes, total_volume, completed_sets, is_sample, session_exercises(id, position, exercise_name, notes, substituted:exercises!session_exercises_substituted_for_fkey(name), session_sets(id, position, weight, reps, target_reps, completed)), personal_records(session_set_id, kind, value, is_baseline)",
+      "id, template_name, started_at, ended_at, notes, total_volume, completed_sets, is_sample, session_exercises(id, exercise_id, position, exercise_name, notes, substituted:exercises!session_exercises_substituted_for_fkey(name), session_sets(id, position, weight, reps, target_reps, completed)), personal_records(session_set_id, kind, value, is_baseline)",
     )
     .eq("id", id)
     .maybeSingle();
@@ -97,7 +97,9 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
                       performed.length ? "font-serif text-[22px] leading-tight" : "font-serif text-[22px] leading-tight text-ink-3"
                     }
                   >
-                    {e.exercise_name}
+                    <Link href={`/exercises/${e.exercise_id}`} className="decoration-line-strong underline-offset-4 hover:underline">
+                      {e.exercise_name}
+                    </Link>
                   </h2>
                   {!performed.length ? <span className="text-xs text-ink-3">Not performed</span> : null}
                 </div>

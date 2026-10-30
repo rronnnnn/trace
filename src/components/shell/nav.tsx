@@ -15,13 +15,13 @@ const PRIMARY = [
   { href: "/history", label: "History", icon: IconHistory },
 ] as const;
 
-// Phase 2 destinations: visible so the product's shape is legible, but honestly inert.
-const UPCOMING = [
-  { label: "Exercises", icon: IconExercises },
-  { label: "Reflections", icon: IconReflection },
+/** On desktop these sit with the rest; on mobile the tab bar holds five, so they live in the menu sheet. */
+export const SECONDARY = [
+  { href: "/exercises", label: "Exercises", icon: IconExercises },
+  { href: "/reflections", label: "Reflections", icon: IconReflection },
 ] as const;
 
-function isActive(path: string, href: string) {
+export function isActive(path: string, href: string) {
   return href === "/" ? path === "/" : path === href || path.startsWith(`${href}/`) || (href === "/train" && path === "/workout");
 }
 
@@ -31,7 +31,7 @@ export function Sidebar({ name, email }: { name: string | null; email: string | 
     <aside className="sticky top-0 hidden h-dvh w-[216px] shrink-0 flex-col border-r border-line px-4 py-7 md:flex">
       <Wordmark className="px-3" />
       <nav className="mt-10 flex flex-col gap-0.5" aria-label="Main">
-        {PRIMARY.map(({ href, label, icon: Icon }) => {
+        {[...PRIMARY, ...SECONDARY].map(({ href, label, icon: Icon }, i) => {
           const active = isActive(path, href);
           return (
             <Link
@@ -40,6 +40,7 @@ export function Sidebar({ name, email }: { name: string | null; email: string | 
               aria-current={active ? "page" : undefined}
               className={cn(
                 "flex h-9 items-center gap-3 rounded-md px-3 text-[14px] transition-colors",
+                i === PRIMARY.length && "mt-6",
                 active ? "bg-sunken text-ink" : "text-ink-2 hover:bg-sunken/60 hover:text-ink",
               )}
             >
@@ -49,17 +50,6 @@ export function Sidebar({ name, email }: { name: string | null; email: string | 
           );
         })}
       </nav>
-      <div className="mt-8 px-3">
-        <p className="eyebrow">Coming next</p>
-        <ul className="mt-2 flex flex-col gap-0.5">
-          {UPCOMING.map(({ label, icon: Icon }) => (
-            <li key={label} className="flex h-9 items-center gap-3 text-[14px] text-ink-4">
-              <Icon />
-              {label}
-            </li>
-          ))}
-        </ul>
-      </div>
       <div className="mt-auto border-t border-line px-3 pt-4">
         <p className="truncate text-[13px] font-medium">{name ?? "Your account"}</p>
         {email ? <p className="truncate text-xs text-ink-3">{email}</p> : null}

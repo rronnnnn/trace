@@ -7,6 +7,7 @@ import type { LandscapeSession } from "@/lib/landscape/terrain";
 import { requireProfile } from "@/lib/supabase/server";
 import { getTimeZone } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
+import { loadWrittenReflections } from "./reflections/data";
 import { SampleHistoryButton } from "./sample-history-button";
 import { StartWorkoutButton } from "./start-workout-button";
 
@@ -46,6 +47,16 @@ export default async function TodayPage() {
   const planned = templates.length ? templates[(lastIndex + 1) % templates.length] : null;
   const trainedToday = sessions.some((s) => !s.is_sample && dayKey(s.ended_at, tz) === today);
   const isTrainingDay = profile.training_days.includes(isoWeekday(today));
+
+  // Last week's written reflection carries a focus into this one.
+  const lastMonday = addDays(weekStart(today), -7);
+  const written = await loadWrittenReflections(supabase, [lastMonday]);
+  const focus = written.byWeek.get(lastMonday)?.nextFocus ?? null;
+  const lastWeekSessions = sessions.filter((s) => {
+    const k = dayKey(s.ended_at, tz);
+    return k >= lastMonday && k < weekStart(today);
+  }).length;
+  const reflectPrompt = written.available && lastWeekSessions > 0 && !written.byWeek.has(lastMonday);
 
   // Highlights of the last session: records set, measured values only.
   const { data: lastRecords } = last
@@ -245,9 +256,20 @@ export default async function TodayPage() {
         </section>
 
         <section aria-labelledby="this-week" className="border-t border-line py-7 md:border-l md:border-t-0 md:pl-10">
-          <h2 id="this-week" className="eyebrow">
-            This week
-          </h2>
+          <div className="flex items-baseline justify-between gap-4">
+            <h2 id="this-week" className="eyebrow">
+              This week
+            </h2>
+            <Link href={`/reflections/${monday}`} className="flex items-center gap-1 text-xs text-ink-3 hover:text-ink">
+              Reflection <IconArrowRight />
+            </Link>
+          </div>
+          {focus ? (
+            <p className="mt-4 border-l-2 border-sage pl-3 text-sm text-ink-2">
+              <span className="text-ink-3">Your focus: </span>
+              {focus}
+            </p>
+          ) : null}
           <dl className="mt-4">
             <Figure
               label={weekTarget ? "of your planned workouts" : "workouts completed"}
@@ -286,6 +308,14 @@ export default async function TodayPage() {
               );
             })}
           </div>
+          {reflectPrompt ? (
+            <Link
+              href={`/reflections/${lastMonday}#yours`}
+              className="mt-6 flex items-center gap-1.5 text-sm text-sage-deep underline decoration-sage-soft underline-offset-4 hover:decoration-sage-deep"
+            >
+              Last week is ready to reflect on <IconArrowRight />
+            </Link>
+          ) : null}
         </section>
       </div>
 

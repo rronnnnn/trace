@@ -183,6 +183,19 @@ export type Database = {
         "exercise_id" | "exercise_name",
         [FK<"goals_exercise_id_fkey", "exercise_id", "exercises">]
       >;
+      weekly_reflections: Table<
+        {
+          id: string;
+          owner_id: string;
+          week_start: string;
+          energy: number | null;
+          note: string | null;
+          next_focus: string | null;
+          created_at: string;
+          updated_at: string;
+        },
+        "week_start"
+      >;
       body_measurements: Table<
         {
           id: string;

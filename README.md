@@ -25,7 +25,7 @@ Scripts: `npm run dev`, `npm run build`, `npm test` (unit), `npm run typecheck`,
 | Auth | `src/proxy.ts`, `src/app/(auth)`, `src/lib/supabase/server.ts` | Email + password. The proxy refreshes the session and guards routes. |
 | Active workout engine | `src/lib/workout/` | Pure reducer (`reducer.ts`, unit-tested), device persistence (`storage.ts`, `use-active-workout.ts`), offline outbox (`sync.ts`). |
 | Landscape | `src/lib/landscape/` | Deterministic terrain from sessions (`terrain.ts`), marching-squares contours (`contours.ts`). No React dependency. |
-| Screens | `src/app/(app)/` | Today, Train, History, Workout. |
+| Screens | `src/app/(app)/` | Today, Train, Exercises, Landscape, Goals, Reflections, History, Workout. |
 | Design tokens | `src/app/globals.css` | Ivory / charcoal / sage. Components use tokens only. |
 
 ### Data integrity
@@ -110,6 +110,26 @@ side view of a mountain whose peak is the goal (`GoalMountain`). The climber is 
 animation. Reaching the target stamps `achieved_at` from the session that did it. Data: `goals` table, RLS, and a
 reference policy for exercises.
 
+## Exercises
+
+`/exercises`: every exercise in your record, most recent first, with its best measured set, a sparkline of recent
+sessions and the change against the 4 weeks before (only claimed when both windows have sessions). Search and a
+muscle filter cover the whole library; exercises not logged yet are listed separately. `/exercises/<id>` charts the
+top set per session (measured, sage) beside the Epley estimate (labelled, neutral) on one axis, with records as
+ringed dots, a hover/arrow-key crosshair and range filter; then rep maxes (heaviest weight for at least N reps,
+measured), the exercise's summit and records, related variations, and every session's sets. Logic:
+`src/lib/exercise-progress.ts` (pure, unit-tested). Custom exercises are still managed at `/train/exercises`.
+
+## Reflections
+
+`/reflections`: one page per Monday–Sunday week (`/reflections/<monday>`), in the viewer's timezone. The facts are
+derived at read time and never stored: planned days hit and missed (today and future days are never "missed"),
+extra sessions, volume against last week and the mean of up to four earlier weeks since training began, time
+trained, a plan streak, what moved (each exercise's best against its previous session), sets per muscle, records
+and session notes. The person writes only how the week felt (five steps), a note, and one focus for next week, which
+then shows on Today and atop the next week. Data: `weekly_reflections` (one row per user and week, RLS). If the
+table is missing, the facts still render and writing is switched off. Logic: `src/lib/reflection.ts` (unit-tested).
+
 ## Appearance
 
 System, Light or Dark (sidebar on desktop; account button on mobile). Every colour is a CSS token with a dark set;
@@ -133,4 +153,4 @@ worker yet).
 
 **Milestone 1 (done):** auth, onboarding, Today, Active Workout, history, sample history.
 
-**Milestone 2 (in progress):** Training Landscape (done). Next: Exercise Progress, Weekly Reflection, routine editing.
+**Milestone 2 (done):** Training Landscape, Goals, routine and exercise editing, Exercise Progress, Weekly Reflection.
