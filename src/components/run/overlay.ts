@@ -1,5 +1,6 @@
 /**
- * The share overlay, after the "Trace Overlay" design: three stacked stats, the route as one
+ * The share overlay, after the "Trace Overlay" design, set in the app's own Geist (the same
+ * face and weight as the run page's figures): three stacked stats, the route as one
  * line drawn from the run's own GPS points, and the TRACE wordmark, on a transparent background
  * so it can sit on the runner's own photo. Drawn straight onto a canvas (not a screenshot of the
  * page), so the PNG is crisp at any scale and nothing but the marks is opaque.
@@ -27,6 +28,7 @@ const INNER_GAP = 2;
 const SECTION_GAP = 28;
 const MARK = 18;
 const MARK_SPACING = 0.42; // em
+const VALUE_TRACKING = -0.02; // em, as the run page's figures
 
 /** Where everything goes, in CSS pixels. Pure, so it is tested without a canvas. */
 export function overlayLayout(o: Pick<OverlayOptions, "stats" | "points" | "showRoute">) {
@@ -66,12 +68,19 @@ export function drawOverlay(o: OverlayOptions, scale = 4) {
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   const cx = l.width / 2;
+  const tracking = (px: number) => {
+    // supported in current Chrome, Safari and Firefox; elsewhere the figures are simply untightened
+    if ("letterSpacing" in ctx) (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${px}px`;
+  };
   for (const s of l.stats) {
-    ctx.font = `600 ${LABEL}px ${o.fontFamily}`;
+    ctx.font = `500 ${LABEL}px ${o.fontFamily}`;
+    tracking(0);
     ctx.fillText(s.label, cx, s.labelY + (LABEL_LINE - LABEL) / 2);
-    ctx.font = `800 ${VALUE}px ${o.fontFamily}`;
+    ctx.font = `500 ${VALUE}px ${o.fontFamily}`;
+    tracking(VALUE * VALUE_TRACKING);
     ctx.fillText(s.value, cx, s.valueY + (VALUE_LINE - VALUE) / 2);
   }
+  tracking(0);
   if (l.route) {
     ctx.strokeStyle = o.routeColor;
     ctx.lineWidth = 5;
@@ -82,7 +91,7 @@ export function drawOverlay(o: OverlayOptions, scale = 4) {
     ctx.stroke();
   }
   // the wordmark, letter-spaced by hand (canvas letterSpacing isn't everywhere yet)
-  ctx.font = `800 ${MARK}px ${o.fontFamily}`;
+  ctx.font = `600 ${MARK}px ${o.fontFamily}`;
   ctx.textAlign = "left";
   const word = "TRACE";
   const gap = MARK * MARK_SPACING;

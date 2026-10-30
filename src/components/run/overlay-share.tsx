@@ -1,6 +1,5 @@
 "use client";
 
-import { Archivo } from "next/font/google";
 import { useEffect, useState } from "react";
 import { IconShare } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -9,8 +8,8 @@ import type { TrackPoint } from "@/lib/run/recorder";
 import { cn } from "@/lib/utils";
 import { drawOverlay, ROUTE_COLORS, type OverlayStat } from "./overlay";
 
-// self-hosted at build time: the PNG is made on the device, with nothing fetched from elsewhere
-const archivo = Archivo({ subsets: ["latin"], weight: ["600", "800"], display: "swap" });
+/** The app's Geist (self-hosted by next/font), as the canvas needs its real family name. */
+const geistFamily = () => getComputedStyle(document.body).getPropertyValue("--font-geist").trim() || getComputedStyle(document.body).fontFamily;
 
 /**
  * A transparent PNG of the run to lay over your own photo: distance, pace, time and the route
@@ -46,8 +45,9 @@ export function OverlayShare({
     let url: string | null = null;
     (async () => {
       // the canvas only uses a font once it has loaded
-      await Promise.all([document.fonts.load(`600 17px ${archivo.style.fontFamily}`), document.fonts.load(`800 44px ${archivo.style.fontFamily}`)]).catch(() => {});
-      const canvas = drawOverlay({ stats, points, showRoute: showRoute && hasRoute, routeColor: color, fontFamily: archivo.style.fontFamily });
+      const family = geistFamily();
+      await Promise.all([document.fonts.load(`500 44px ${family}`), document.fonts.load(`600 18px ${family}`)]).catch(() => {});
+      const canvas = drawOverlay({ stats, points, showRoute: showRoute && hasRoute, routeColor: color, fontFamily: family });
       const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/png"));
       if (!alive || !blob) return;
       url = URL.createObjectURL(blob);
