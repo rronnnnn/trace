@@ -2,6 +2,7 @@
 
 import { Archivo } from "next/font/google";
 import { useEffect, useState } from "react";
+import { IconShare } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/dialog";
 import type { TrackPoint } from "@/lib/run/recorder";
@@ -16,7 +17,21 @@ const archivo = Archivo({ subsets: ["latin"], weight: ["600", "800"], display: "
  * drawn from its GPS points. Made in the browser; the route never leaves the device unless you
  * share the image yourself.
  */
-export function OverlayShare({ stats, points, fileName }: { stats: OverlayStat[]; points: TrackPoint[] | null; fileName: string }) {
+export function OverlayShare({
+  stats,
+  points,
+  fileName,
+  compact,
+  name,
+}: {
+  stats: OverlayStat[];
+  points: TrackPoint[] | null;
+  fileName: string;
+  /** a small icon button, for lists */
+  compact?: boolean;
+  /** what the overlay is of, for the button's accessible name in a list */
+  name?: string;
+}) {
   const [open, setOpen] = useState(false);
   const [color, setColor] = useState<string>(ROUTE_COLORS[0]);
   const [showRoute, setShowRoute] = useState(Boolean(points && points.length > 1));
@@ -72,9 +87,21 @@ export function OverlayShare({ stats, points, fileName }: { stats: OverlayStat[]
 
   return (
     <>
-      <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
-        Share overlay
-      </Button>
+      {compact ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label={`Share overlay${name ? ` for ${name}` : ""}`}
+          title="Share overlay"
+          className="flex size-10 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-sunken hover:text-ink"
+        >
+          <IconShare />
+        </button>
+      ) : (
+        <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
+          Share overlay
+        </Button>
+      )}
       <Sheet open={open} onOpenChange={setOpen} title="Share overlay" description="A transparent PNG to lay over your own photo. It's made on this device.">
         <div className="space-y-5">
           <div

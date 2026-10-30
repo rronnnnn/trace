@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { OverlayShare } from "@/components/run/overlay-share";
 import { RouteTrace } from "@/components/run/route-trace";
 import { Sparkline } from "@/components/sparkline";
 import { buttonClass } from "@/components/ui/button";
@@ -171,10 +172,10 @@ export default async function RunsPage() {
               <h2 className="eyebrow">{month}</h2>
               <ul className="mt-3 border-t border-ink/80">
                 {list.map((r) => (
-                  <li key={r.id}>
+                  <li key={r.id} className="flex items-center gap-1 border-b border-line">
                     <Link
                       href={`/runs/${r.id}`}
-                      className="group grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-4 border-b border-line py-4 transition-colors hover:bg-surface sm:grid-cols-[5.5rem_minmax(0,1fr)_5rem_8rem]"
+                      className="group grid min-w-0 flex-1 grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-4 py-4 transition-colors hover:bg-surface sm:grid-cols-[5.5rem_minmax(0,1fr)_5rem_8rem]"
                     >
                       <span className="num text-[13px] text-ink-3">{formatShortDate(r.startedAt, tz)}</span>
                       <span className="min-w-0">
@@ -188,6 +189,18 @@ export default async function RunsPage() {
                       <span className="hidden sm:block">{r.points && r.points.length > 1 ? <RouteTrace points={r.points} width={72} height={40} /> : null}</span>
                       <span className="num text-right text-[15px] font-medium">{formatKm(r.meters)} km</span>
                     </Link>
+                    {/* beside the row, not inside its link */}
+                    <OverlayShare
+                      compact
+                      name={runTitle(r, tz)}
+                      stats={[
+                        { label: "Distance", value: `${formatKm(r.meters)} km` },
+                        { label: "Pace", value: `${formatPace(paceOf(r.movingSeconds, r.meters))} /km` },
+                        { label: "Time", value: formatRunTime(r.movingSeconds * 1000) },
+                      ]}
+                      points={r.source === "gps" && r.points && r.points.length > 1 ? r.points : null}
+                      fileName={`trace-run-${r.startedAt.slice(0, 10)}.png`}
+                    />
                   </li>
                 ))}
               </ul>

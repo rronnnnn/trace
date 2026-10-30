@@ -44,6 +44,12 @@ export const IconReflection = (p: P) => (
     <path d="M3 14.5V8M7 14.5V4M11 14.5V9.5M15 14.5V6.5" />
   </svg>
 );
+export const IconShare = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M9 11V2.5M5.5 6 9 2.5 12.5 6" />
+    <path d="M6 8.5H4.5v7h9v-7H12" />
+  </svg>
+);
 export const IconRun = (p: P) => (
   <svg {...base(p)}>
     <circle cx="11.5" cy="3.5" r="1.5" />
