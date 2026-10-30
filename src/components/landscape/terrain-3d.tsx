@@ -4,7 +4,8 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import * as THREE from "three";
 import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { contourChains, evenLevels, resampleField } from "@/lib/landscape/contours";
-import type { LiftTrail, RegionSummary } from "@/lib/landscape/explore";
+import type { RegionSummary } from "@/lib/landscape/explore";
+import { progressStops } from "@/lib/landscape/trail";
 import { FRONTIER, type SummitSpot, type frontierGrid } from "@/lib/landscape/frontier";
 import type { LandmarkCategory, Summit, WorldLandmark } from "@/lib/landscape/landmarks";
 import { edgeFalloff, riverMesh, SIZE_X, SIZE_Z, terrainMesh, toWorld, type MeshPalette } from "@/lib/landscape/mesh";
@@ -103,48 +104,6 @@ function palette(): MeshPalette {
     high: v("--terrain-high", [247, 245, 239]),
     vegetation: v("--terrain-vegetation", [180, 187, 155]),
   };
-}
-
-const MIN_STOPS = 8;
-const MAX_STOPS = 12;
-
-/**
- * Waypoints up a range, foot to summit: `t` is the share of the climb (0 = the first session,
- * 1 = today's best). With a lift trail, each stop is a weight level and when it was first reached;
- * with fewer new bests than stops, the levels are spaced evenly between the first and the best.
- * Without a lift, the stops count workouts instead.
- */
-export function progressStops(trail: LiftTrail | null, sessions: number, unit: string, timeZone: string) {
-  const stops: { t: number; text: string }[] = [];
-  if (trail) {
-    const steps = trail.steps;
-    const w0 = steps[0].weight;
-    const span = Math.max(1e-6, steps.at(-1)!.weight - w0);
-    const withDate = (w: number, at: string, first: boolean) =>
-      `${formatWeight(w)} ${unit}${first ? ` · ${formatShortDate(at, timeZone)}` : ""}`;
-    if (steps.length >= MIN_STOPS) {
-      const every = Math.ceil(steps.length / MAX_STOPS);
-      const keep = steps.filter((_, i) => i % every === 0 || i === steps.length - 1);
-      keep.forEach((s, i) => stops.push({ t: (s.weight - w0) / span, text: withDate(s.weight, s.endedAt, i === 0) }));
-    } else {
-      for (let i = 0; i < MIN_STOPS; i++) {
-        const t = i / (MIN_STOPS - 1);
-        const level = i === MIN_STOPS - 1 ? steps.at(-1)!.weight : Math.round((w0 + span * t) * 2) / 2;
-        const reached = steps.find((s) => s.weight >= level - 1e-9) ?? steps.at(-1)!;
-        stops.push({ t, text: withDate(level, reached.endedAt, i === 0) });
-      }
-    }
-  } else if (sessions >= 2) {
-    let shown = 0;
-    for (let i = 0; i < MIN_STOPS; i++) {
-      const t = i / (MIN_STOPS - 1);
-      const n = Math.round(1 + (sessions - 1) * t);
-      // a dot for every stop; a label only where the count moves on
-      stops.push({ t, text: n > shown ? (n === 1 ? "1st workout" : plural(n, "workout")) : "" });
-      shown = n;
-    }
-  }
-  return stops;
 }
 
 /** Soft round glow for data points, drawn as screen-sized sprites. */
@@ -863,7 +822,8 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         const [x, y] = last ? path.at(-1)! : at(stop.t);
         const pos = new THREE.Vector3(...toWorld(x, y, mesh.heightAt, 0.35));
         const dot = new THREE.Mesh(
-          new THREE.SphereGeometry(last ? 0.7 : first ? 0.5 : 0.4, 12, 8),
+          // small: the trail is a line with a few marks on it, not a string of beads
+          new THREE.SphereGeometry(last ? 0.34 : first ? 0.26 : 0.2, 12, 8),
           new THREE.MeshBasicMaterial({ color: last ? sage : trailInk }),
         );
         dot.position.copy(pos);
