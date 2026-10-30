@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { RouteTrace } from "@/components/run/route-trace";
+import { OverlayShare } from "@/components/run/overlay-share";
 import { RunView } from "@/components/run/run-view";
 import { IconArrowLeft } from "@/components/icons";
 import { bestEffort, bestPace, EFFORTS, elevationGain, splits } from "@/lib/run/analysis";
@@ -48,7 +49,18 @@ export default async function RunDetailPage({ params }: PageProps<"/runs/[id]">)
           <h1 className="mt-3 break-words font-serif text-[34px] leading-[1.05] tracking-[-0.02em] sm:text-[48px]">{title}</h1>
           <p className="mt-2 text-[14px] text-ink-3">{when}</p>
         </div>
-        <RunActions id={r.id} title={r.title} />
+        <div className="flex flex-wrap items-center gap-2">
+          <OverlayShare
+            stats={[
+              { label: "Distance", value: `${formatKm(meters)} km` },
+              { label: "Pace", value: `${formatPace(avg)} /km` },
+              { label: "Time", value: formatRunTime(r.moving_seconds * 1000) },
+            ]}
+            points={gps ? points : null}
+            fileName={`trace-run-${r.started_at.slice(0, 10)}.png`}
+          />
+          <RunActions id={r.id} title={r.title} />
+        </div>
       </header>
 
       {/* the three numbers that matter, large, beside the route's shape */}
