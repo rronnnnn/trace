@@ -251,3 +251,16 @@
     linear-gradient(to bottom, transparent, #000 9%, #000 91%, transparent);
   mask-composite: intersect;
 }
+
+/* Landmark unlock (the Reveal beat): lines rise 18px into place, the rule draws across */
+@keyframes unlock-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}
+@keyframes unlock-draw {
+  from {
+    transform: scaleX(0);
+  }
+}

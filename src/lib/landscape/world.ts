@@ -37,6 +37,9 @@ export type WorldSession = {
   records: number;
   /** the heaviest completed set of each weighted exercise in it (progress trails) */
   lifts?: { exerciseId: string; name: string; weight: number; reps: number | null }[];
+  /** the measured records behind `records`, for landmarks */
+  prs?: { exerciseId: string; name: string; kind: "heaviest_weight" | "most_reps"; weight: number | null; reps: number | null }[];
+  isSample?: boolean;
 };
 
 export type RegionGrowth = {

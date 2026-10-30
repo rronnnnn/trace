@@ -44,6 +44,12 @@ export const IconReflection = (p: P) => (
     <path d="M3 14.5V8M7 14.5V4M11 14.5V9.5M15 14.5V6.5" />
   </svg>
 );
+export const IconAtlas = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M2.5 4.2 6.5 2.5l5 1.8 4-1.6v11.1l-4 1.7-5-1.8-4 1.6Z" />
+    <path d="M6.5 2.5v11.2M11.5 4.3v11.1" />
+  </svg>
+);
 export const IconArrowRight = (p: P) => (
   <svg {...base({ width: 14, height: 14, viewBox: "0 0 14 14", ...p })}>
     <path d="M2.5 7h9M8 3.5 11.5 7 8 10.5" />

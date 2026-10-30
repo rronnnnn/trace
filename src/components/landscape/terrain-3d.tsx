@@ -5,6 +5,8 @@ import * as THREE from "three";
 import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { contourChains, evenLevels, resampleField } from "@/lib/landscape/contours";
 import type { LiftTrail, RegionSummary } from "@/lib/landscape/explore";
+import { FRONTIER, type SummitSpot, type frontierGrid } from "@/lib/landscape/frontier";
+import type { LandmarkCategory, Summit, WorldLandmark } from "@/lib/landscape/landmarks";
 import { edgeFalloff, riverMesh, SIZE_X, SIZE_Z, terrainMesh, toWorld, type MeshPalette } from "@/lib/landscape/mesh";
 import { parseColor, type RGB } from "@/lib/landscape/relief";
 import type { RestSpan } from "@/lib/landscape/rest";
@@ -12,7 +14,45 @@ import type { Landmark } from "@/lib/landscape/terrain";
 import type { World } from "@/lib/landscape/world";
 import { formatShortDate, formatVolume, formatWeight, plural } from "@/lib/format";
 
-export type Terrain3DHandle = { zoomIn: () => void; zoomOut: () => void; reset: () => void };
+export type Terrain3DHandle = {
+  zoomIn: () => void;
+  zoomOut: () => void;
+  reset: () => void;
+  /** play the landmark-unlock sequence on a place; returns its length in ms (0 if not found) */
+  unlock: (key: PlaceKey, info: { stats: string; accent: string | null }) => number;
+};
+
+/**
+ * Landmark unlock, after the "Landmark Unlock" design: three beats on one authored time axis (s).
+ * Approach: the camera drifts in while the locked marker pulses and contracts. Rise: the marker
+ * pops in accent, two ripples spread and the landmark rises out of the ground. Reveal: a leader
+ * line, the stats and the name settle in. Then it holds, and fades back into the world.
+ */
+export const UNLOCK = { rise: 0.8, reveal: 1.8, end: 3.0, hold: 2.6, fade: 0.6 };
+const ease = {
+  outCubic: (t: number) => 1 - Math.pow(1 - t, 3),
+  inOutCubic: (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
+  outBack: (t: number) => 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2),
+};
+/** from → to between authored times a and b, eased */
+const tween = (e: (t: number) => number) => (from: number, to: number, a: number, b: number) => (T: number) =>
+  from + (to - from) * e(Math.min(1, Math.max(0, (T - a) / (b - a))));
+const enter = tween(ease.outCubic);
+const draw = tween(ease.inOutCubic);
+const pop = tween(ease.outBack);
+
+/** The unexplored world around the map, and the summits on it (see lib/landscape/frontier). */
+export type FrontierScene = {
+  grid: ReturnType<typeof frontierGrid>;
+  spots: SummitSpot[];
+  summits: Summit[];
+};
+
+/** A landmark where it stands on the map (normalised, beside the session that earned it). */
+export type LandmarkSpot = { landmark: WorldLandmark; x: number; y: number };
+
+/** What the scene can select besides sessions, rest and regions: `landmark:<id>` or `summit:<slot>`. */
+export type PlaceKey = `landmark:${string}` | `summit:${number}`;
 
 type Props = {
   terrain: World;
@@ -26,6 +66,15 @@ type Props = {
   selectedRegion: string | null;
   regions: RegionSummary[];
   theme: number;
+  frontier?: FrontierScene | null;
+  landmarks?: LandmarkSpot[];
+  /** the selected landmark or summit */
+  selectedPlace?: PlaceKey | null;
+  /** fly to this place once the scene is built (e.g. "locate" from the Atlas) */
+  focusPlace?: PlaceKey | null;
+  onSelectPlace?: (key: PlaceKey) => void;
+  /** the scene is built and can play (e.g. an unlock) */
+  onReady?: () => void;
   onSelectSession: (l: Landmark) => void;
   onSelectRegion: (key: string) => void;
   onSelectRest: (span: RestSpan) => void;
@@ -145,6 +194,12 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     selectedRegion,
     regions,
     theme,
+    frontier = null,
+    landmarks = [],
+    selectedPlace = null,
+    focusPlace = null,
+    onSelectPlace,
+    onReady,
     onSelectSession,
     onSelectRegion,
     onSelectRest,
@@ -159,19 +214,21 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     setMode: (tilted: boolean) => void;
     setSelected: (id: string | null) => void;
     setRegion: (key: string | null) => void;
+    setPlace: (key: PlaceKey | null) => void;
+    unlock: (key: PlaceKey, info: { stats: string; accent: string | null }) => number;
     zoom: (factor: number) => void;
     reset: () => void;
   };
   const api = useRef<Api | null>(null);
-  const callbacks = useRef({ onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone });
+  const callbacks = useRef({ onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone, onSelectPlace, onReady });
   useEffect(() => {
-    callbacks.current = { onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone };
-  }, [onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone]);
-  const initial = useRef({ tilted, selectedId, selectedRegion, from });
+    callbacks.current = { onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone, onSelectPlace, onReady };
+  }, [onSelectSession, onSelectRegion, onSelectRest, onClearSelection, onGrowthDone, onSelectPlace, onReady]);
+  const initial = useRef({ tilted, selectedId, selectedRegion, from, selectedPlace, focusPlace });
   useEffect(() => {
     // `from` is read once, when the scene is built: clearing it after the growth must not rebuild
-    initial.current = { tilted, selectedId, selectedRegion, from };
-  }, [tilted, selectedId, selectedRegion, from]);
+    initial.current = { tilted, selectedId, selectedRegion, from, selectedPlace, focusPlace };
+  }, [tilted, selectedId, selectedRegion, from, selectedPlace, focusPlace]);
 
   useEffect(() => {
     const el = host.current;
@@ -302,6 +359,49 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     ground.castShadow = true;
     ground.receiveShadow = true;
     world.add(ground);
+
+    // ── the frontier: distant ranges beyond the developed map, rising out of mist at its edge.
+    // A separate mesh around the map; the developed terrain above is untouched by it.
+    if (frontier) {
+      const g = frontier.grid;
+      const fp = new Float32Array(g.cols * g.rows * 3);
+      const fc = new Float32Array(g.cols * g.rows * 4);
+      const mistTone = cssColor("--paper", [244, 241, 234]);
+      const lo = new THREE.Color().setRGB(...(pal.low.map((c) => c / 255) as [number, number, number]), THREE.SRGBColorSpace);
+      const mi = new THREE.Color().setRGB(...(pal.mid.map((c) => c / 255) as [number, number, number]), THREE.SRGBColorSpace);
+      const hi = new THREE.Color().setRGB(...(pal.high.map((c) => c / 255) as [number, number, number]), THREE.SRGBColorSpace);
+      const c = new THREE.Color();
+      for (let j = 0; j < g.rows; j++)
+        for (let i = 0; i < g.cols; i++) {
+          const k = j * g.cols + i;
+          const h = g.heights[k];
+          fp.set([FRONTIER.minX + i * FRONTIER.step, h, FRONTIER.minZ + j * FRONTIER.step], k * 3);
+          const t = Math.min(1, h / 14);
+          if (t < 0.5) c.copy(lo).lerp(mi, t * 2);
+          else c.copy(mi).lerp(hi, (t - 0.5) * 2);
+          c.lerp(mistTone, g.mist[k] * 0.85);
+          fc.set([c.r, c.g, c.b, g.alpha[k] * (1 - 0.5 * g.mist[k])], k * 4);
+        }
+      const fi: number[] = [];
+      for (let j = 0; j < g.rows - 1; j++)
+        for (let i = 0; i < g.cols - 1; i++) {
+          const a = j * g.cols + i;
+          // skip cells that are wholly invisible (the developed map itself, the far horizon)
+          if (g.alpha[a] + g.alpha[a + 1] + g.alpha[a + g.cols] + g.alpha[a + g.cols + 1] < 0.004) continue;
+          fi.push(a, a + g.cols, a + 1, a + 1, a + g.cols, a + g.cols + 1);
+        }
+      const fg = new THREE.BufferGeometry();
+      fg.setAttribute("position", new THREE.BufferAttribute(fp, 3));
+      fg.setAttribute("color", new THREE.BufferAttribute(fc, 4));
+      fg.setIndex(fi);
+      fg.computeVertexNormals();
+      const frontierMesh = new THREE.Mesh(
+        fg,
+        new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, alphaTest: 0.02, roughness: 0.95, metalness: 0 }),
+      );
+      frontierMesh.renderOrder = -1;
+      world.add(frontierMesh);
+    }
 
     // ── contours: dense, sage-tinted; every fifth a little stronger ───────────
     const cc = 200;
@@ -442,6 +542,99 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     leader.visible = false;
     world.add(halo, leader);
 
+    // ── landmarks: small stone forms beside the sessions that earned them, and cairns on the
+    // summits reached. Matte stone, one silhouette per kind; sage only when selected.
+    type Place = { key: PlaceKey; pos: THREE.Vector3; top: THREE.Vector3; object: THREE.Object3D; title: string; sub: string };
+    const places: Place[] = [];
+    const placeGroup = new THREE.Group();
+    world.add(placeGroup);
+    const stone = new THREE.MeshStandardMaterial({ color: cssColor("--ink-2", [85, 82, 75]), roughness: 0.85, metalness: 0 });
+    const stoneLit = new THREE.MeshStandardMaterial({
+      color: sage,
+      emissive: sage,
+      emissiveIntensity: dark ? 0.35 : 0.15,
+      roughness: 0.8,
+      metalness: 0,
+    });
+    const footMat = new THREE.MeshBasicMaterial({ color: sage, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
+    const cairn = (scale = 1) => {
+      const g = new THREE.Group();
+      [0.46, 0.34, 0.22].forEach((r, i, all) => {
+        const m = new THREE.Mesh(new THREE.DodecahedronGeometry(r * scale, 0), stone);
+        m.scale.y = 0.62;
+        m.position.y = all.slice(0, i).reduce((y, q) => y + q * 1.1 * scale, r * 0.55 * scale);
+        m.rotation.y = i * 0.9;
+        g.add(m);
+      });
+      return g;
+    };
+    const form = (category: LandmarkCategory) => {
+      if (category === "consistency") return cairn();
+      const g = new THREE.Group();
+      const m =
+        category === "strength"
+          ? new THREE.Mesh(new THREE.ConeGeometry(0.34, 2.1, 4), stone) // a slim four-sided spire
+          : new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.3, 1.5, 5), stone); // a standing stone
+      m.position.y = category === "strength" ? 1.05 : 0.75;
+      m.rotation.y = 0.4;
+      g.add(m);
+      return g;
+    };
+    const foot = (r: number) => {
+      // a faint ring on the ground, so the place still reads in the flat map
+      const m = new THREE.Mesh(new THREE.RingGeometry(r * 0.72, r, 28), footMat);
+      m.rotation.x = -Math.PI / 2;
+      m.position.y = 0.06;
+      return m;
+    };
+    for (const { landmark: l, x, y } of landmarks) {
+      const g = form(l.category);
+      g.add(foot(1));
+      const pos = new THREE.Vector3(...toWorld(x, y, mesh.heightAt, 0));
+      g.position.copy(pos);
+      placeGroup.add(g);
+      places.push({
+        key: `landmark:${l.id}`,
+        pos,
+        top: pos.clone().add(new THREE.Vector3(0, l.category === "strength" ? 2.3 : 1.7, 0)),
+        object: g,
+        title: l.title,
+        sub: formatShortDate(l.at, timeZone),
+      });
+    }
+    if (frontier) {
+      for (const s of frontier.summits) {
+        const spot = frontier.spots[s.slot];
+        if (!spot) continue;
+        const h = frontier.grid.heightAt(spot.x, spot.z);
+        const pos = new THREE.Vector3(spot.x, h, spot.z);
+        const g = new THREE.Group();
+        g.position.copy(pos);
+        if (s.landmark) {
+          g.add(cairn(1.25));
+          g.add(foot(1.6));
+        }
+        placeGroup.add(g);
+        places.push({
+          key: `summit:${s.slot}`,
+          pos,
+          top: pos.clone().add(new THREE.Vector3(0, s.landmark ? 2.2 : 0.8, 0)),
+          object: g,
+          title: s.name ?? "Uncharted summit",
+          sub: s.landmark ? formatShortDate(s.landmark.at, timeZone) : "Not yet reached",
+        });
+      }
+    }
+    let selectedPlaceIndex = -1;
+    const paintPlaces = () => {
+      places.forEach((p, i) =>
+        p.object.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.isMesh && m.material !== footMat) m.material = i === selectedPlaceIndex ? stoneLit : stone;
+        }),
+      );
+    };
+
     // ── cameras & controls (perspective for 3D, orthographic for the flat 2D map) ─
     const persp = new THREE.PerspectiveCamera(40, 1, 0.5, 900);
     const ortho = new THREE.OrthographicCamera(-50, 50, 37, -37, 0.1, 1000);
@@ -459,8 +652,10 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       dirty = true;
     };
     const clampTarget = (c: MapControls) => {
-      const x = Math.min(SIZE_X + 6, Math.max(-6, c.target.x));
-      const z = Math.min(SIZE_Z + 6, Math.max(-6, c.target.z));
+      // a little beyond the map, and out to the frontier's summits when there is a frontier
+      const m = frontier ? 28 : 6;
+      const x = Math.min(SIZE_X + m, Math.max(-m, c.target.x));
+      const z = Math.min(SIZE_Z + (frontier ? 14 : 6), Math.max(-m, c.target.z));
       if (x !== c.target.x || z !== c.target.z) {
         camera.position.x += x - c.target.x;
         camera.position.z += z - c.target.z;
@@ -671,7 +866,17 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     selectedLabel.className =
       "pointer-events-none whitespace-nowrap rounded-md bg-[var(--surface)] px-2 py-1 text-[11px] text-ink shadow-[var(--shadow)]";
     const selectedPos = new THREE.Vector3();
-    addLabel(selectedLabel, selectedPos, () => selectedIndex >= 0);
+    addLabel(selectedLabel, selectedPos, () => selectedIndex >= 0 || selectedPlaceIndex >= 0);
+
+    // reached summits carry their name, quietly, like a place name on a map
+    for (const p of places) {
+      if (!p.key.startsWith("summit:") || p.title === "Uncharted summit") continue;
+      const tag = document.createElement("div");
+      tag.className = "pointer-events-none whitespace-nowrap font-serif text-[12px] italic leading-none text-ink-2";
+      tag.style.textShadow = "0 0 6px var(--paper), 0 0 2px var(--paper)";
+      tag.textContent = p.title;
+      addLabel(tag, p.top.clone().add(new THREE.Vector3(0, 1.4, 0)), () => !growth && selectedPlaceIndex !== places.indexOf(p));
+    }
 
     for (const lake of terrain.water.lakes) {
       if (lake.span.days < 2) continue;
@@ -735,6 +940,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       points.visible = on;
       if (bankLines) bankLines.visible = on;
       trailGroup.visible = on;
+      placeGroup.visible = on;
     };
     if (growth) showDetail(false);
     const stepGrowth = (now: number) => {
@@ -764,6 +970,10 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     const tick = (now: number) => {
       const grew = stepGrowth(now);
       if (grew) dirty = true;
+      if (unlocking) {
+        if (!unlocking.step((now - unlocking.t0) / 1000)) unlocking = null;
+        dirty = true;
+      }
       const flew = fly ? fly(now) : false;
       if (!flew) fly = null;
       const flying = glide() || flew;
@@ -829,7 +1039,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         changed();
       });
     };
-    const flyToPoint = (p: THREE.Vector3) => {
+    const flyToPoint = (p: THREE.Vector3, dur = 480, close = 44) => {
       const c = ctl();
       const fromT = c.target.clone();
       const toT = new THREE.Vector3(p.x, 0, p.z);
@@ -845,7 +1055,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         });
       }
       const sph = new THREE.Spherical().setFromVector3(persp.position.clone().sub(c.target));
-      const d1 = Math.min(sph.radius, 44);
+      const d1 = Math.min(sph.radius, close);
       animate((e) => {
         c.target.lerpVectors(fromT, toT, e);
         persp.position
@@ -853,7 +1063,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
           .add(new THREE.Vector3().setFromSphericalCoords(sph.radius * Math.pow(d1 / sph.radius, e), sph.phi, sph.theta));
         persp.lookAt(c.target);
         changed();
-      });
+      }, dur);
     };
     const reset = () => {
       const c = ctl();
@@ -906,6 +1116,22 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
           best = i;
         }
       });
+      // landmarks and summits: their stone, or the summit's peak
+      let place = -1;
+      let placeD = 20;
+      places.forEach((p, i) => {
+        for (const at of [p.pos, p.top]) {
+          v.copy(at);
+          v.y *= world.scale.y;
+          v.project(camera);
+          const d = Math.hypot(((v.x + 1) / 2) * r.width - (clientX - r.left), ((1 - v.y) / 2) * r.height - (clientY - r.top));
+          if (v.z < 1 && d < placeD && d < bestD) {
+            placeD = d;
+            place = i;
+          }
+        }
+      });
+      if (place >= 0 && placeGroup.visible) return { kind: "place" as const, index: place };
       if (best >= 0) return { kind: "session" as const, index: best };
       const wet = water ? raycaster.intersectObject(water, false)[0] : undefined;
       if (wet) {
@@ -925,7 +1151,10 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
 
     const selectAt = (clientX: number, clientY: number) => {
       const hit = pickAt(clientX, clientY);
-      if (hit?.kind === "session") {
+      if (hit?.kind === "place") {
+        callbacks.current.onSelectPlace?.(places[hit.index].key);
+        flyToPoint(places[hit.index].pos);
+      } else if (hit?.kind === "session") {
         callbacks.current.onSelectSession(marks[hit.index]);
         flyToPoint(base[hit.index]);
       } else if (hit?.kind === "rest") callbacks.current.onSelectRest(hit.span);
@@ -1114,6 +1343,18 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
           tipEl.style.opacity = "1";
           tipEl.style.transform = `translate(${e.clientX - r.left + 14}px, ${e.clientY - r.top + 14}px)`;
           renderer.domElement.style.cursor = "pointer";
+        } else if (hit?.kind === "place") {
+          const p = places[hit.index];
+          const a = document.createElement("div");
+          a.className = "text-[12px] font-medium";
+          a.textContent = p.title;
+          const b = document.createElement("div");
+          b.className = "num text-[11px] opacity-70";
+          b.textContent = p.sub;
+          tipEl.replaceChildren(a, b);
+          tipEl.style.opacity = "1";
+          tipEl.style.transform = `translate(${e.clientX - r.left + 14}px, ${e.clientY - r.top + 14}px)`;
+          renderer.domElement.style.cursor = "pointer";
         } else {
           tipEl.style.opacity = "0";
           renderer.domElement.style.cursor = hit ? "pointer" : "grab";
@@ -1149,10 +1390,155 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       }
       refreshPoints();
     };
+    const setPlace = (key: PlaceKey | null) => {
+      selectedPlaceIndex = key ? places.findIndex((p) => p.key === key) : -1;
+      paintPlaces();
+      if (selectedPlaceIndex >= 0) {
+        const p = places[selectedPlaceIndex];
+        selectedPos.copy(p.top).add(new THREE.Vector3(0, 1.6, 0));
+        selectedLabel.textContent = `${p.sub} · ${p.title}`;
+      }
+      invalidate();
+    };
     const setRegion = (key: string | null) => {
       selectedRegionIndex = key ? (regionOf.get(key) ?? -1) : -1;
       regionUniforms.uSelected.value = selectedRegionIndex;
       refreshPoints();
+    };
+
+    // ── landmark unlock (see UNLOCK) ─────────────────────────────────────────
+    const unlockFx = new THREE.Group();
+    world.add(unlockFx);
+    const ringGeo = new THREE.RingGeometry(0.93, 1, 64);
+    const fxPoint = (size: number, color: THREE.Color) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0], 3));
+      g.setAttribute("size", new THREE.Float32BufferAttribute([size], 1));
+      g.setAttribute("alpha", new THREE.Float32BufferAttribute([0], 1));
+      g.setAttribute("tint", new THREE.Float32BufferAttribute(color.toArray(), 3));
+      const p = new THREE.Points(
+        g,
+        new THREE.ShaderMaterial({ ...markerShader, uniforms: { uPixelRatio: { value: dpr } }, transparent: true, depthWrite: false, depthTest: false }),
+      );
+      p.renderOrder = 8;
+      return p;
+    };
+    const setPoint = (p: THREE.Points, size: number, alpha: number) => {
+      (p.geometry.attributes.size.array as Float32Array)[0] = size;
+      (p.geometry.attributes.alpha.array as Float32Array)[0] = alpha;
+      p.geometry.attributes.size.needsUpdate = true;
+      p.geometry.attributes.alpha.needsUpdate = true;
+    };
+    const inkTone = cssColor("--ink", [40, 39, 36]);
+    let unlocking: { t0: number; step: (T: number) => boolean } | null = null;
+    const unlock = (key: PlaceKey, info: { stats: string; accent: string | null }) => {
+      const i = places.findIndex((p) => p.key === key);
+      if (i < 0 || unlocking) return 0;
+      const p = places[i];
+      const reducedMotion = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+      const { rise: R0, reveal: V, end: END, hold, fade } = UNLOCK;
+      const total = END + hold + fade;
+      // Approach: drift toward the place
+      flyToPoint(p.pos, reducedMotion ? 1 : R0 * 1000, 40);
+      // the locked marker (a quiet ring that pulses, then contracts), glow and two ripples
+      const locked = fxPoint(18, inkTone);
+      const pulse = fxPoint(18, inkTone);
+      const glow = fxPoint(90, sage);
+      for (const q of [locked, pulse, glow]) q.position.copy(p.pos).add(new THREE.Vector3(0, 0.4, 0));
+      const ripples = [0.02, 0.28].map((delay) => {
+        const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: sage, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
+        m.rotation.x = -Math.PI / 2;
+        m.position.copy(p.pos).add(new THREE.Vector3(0, 0.12, 0));
+        m.renderOrder = 7;
+        return { m, delay };
+      });
+      unlockFx.add(locked, pulse, glow, ...ripples.map((r) => r.m));
+      // the stats beside the peak, on a leader line
+      const tag = document.createElement("div");
+      tag.className = "pointer-events-none flex flex-col gap-0.5 whitespace-nowrap";
+      tag.style.textShadow = "0 0 8px var(--paper), 0 0 2px var(--paper)";
+      const a = document.createElement("div");
+      a.className = "num text-[13px] text-ink-3";
+      a.textContent = info.stats;
+      tag.append(a);
+      if (info.accent) {
+        const b = document.createElement("div");
+        b.className = "num text-[13px] font-medium text-sage-deep";
+        b.textContent = info.accent;
+        tag.append(b);
+      }
+      const tagPos = p.top.clone().add(new THREE.Vector3(0, 7.6, 0));
+      let tagOn = false;
+      addLabel(tag, tagPos, () => tagOn);
+      const lines = [...tag.children] as HTMLElement[];
+      const object = p.object;
+      const prevSelected = selectedPlaceIndex;
+      selectedPlaceIndex = i; // the marker pops in accent
+      const T0 = performance.now();
+      const step = (T: number) => {
+        // Approach
+        const shrink = T < R0 ? draw(1, 0.7, R0 - 0.35, R0)(T) : 0;
+        const pul = T < R0 ? 1 + 0.5 * enter(0, 1, 0.15, R0 - 0.35)(T) : 1;
+        setPoint(locked, 18 * shrink, shrink > 0 ? 0.9 : 0);
+        setPoint(pulse, 18 * pul, T < R0 ? Math.max(0, 0.35 * (1.5 - pul) * 2) : 0);
+        if (T < R0 && selectedPlaceIndex === i) {
+          selectedPlaceIndex = -1;
+          paintPlaces();
+        }
+        // Rise: the marker pops, ripples spread, the landmark rises out of the ground
+        const lift = pop(0, 1, R0 + 0.05, R0 + 0.8)(T);
+        object.scale.set(1, Math.max(0.001, lift), 1);
+        if (T >= R0 && selectedPlaceIndex !== i) {
+          selectedPlaceIndex = i;
+          paintPlaces();
+        }
+        for (const r of ripples) {
+          const start = R0 + r.delay;
+          const q = enter(0, 1, start, start + 0.95)(T);
+          r.m.scale.setScalar(0.6 + q * 13);
+          (r.m.material as THREE.MeshBasicMaterial).opacity = T < start ? 0 : (1 - q) * 0.8;
+        }
+        const out = 1 - enter(0, 1, END + hold, total)(T);
+        setPoint(glow, 90, enter(0, 1, R0, R0 + 0.3)(T) * (0.75 + 0.15 * Math.sin(T * 5)) * 0.6 * out);
+        // Reveal: leader line, then the stats
+        const lead = draw(0, 1, V - 0.25, V + 0.15)(T);
+        leader.visible = lead > 0 && out > 0;
+        leader.position.copy(p.top);
+        leader.scale.y = Math.max(0.001, lead);
+        (leader.material as THREE.LineBasicMaterial).opacity = 0.8 * out;
+        tagOn = T >= V;
+        lines.forEach((el, k) => {
+          const d = V + 0.05 + k * 0.1;
+          el.style.opacity = String(enter(0, 1, d, d + 0.35)(T) * out);
+          el.style.transform = `translateY(${enter(18, 0, d, d + 0.45)(T)}px)`;
+        });
+        if (T < total) return true;
+        // back to the world as it was: the landmark stands, selection restored
+        object.scale.set(1, 1, 1);
+        leader.visible = false;
+        leader.scale.y = 1;
+        (leader.material as THREE.LineBasicMaterial).opacity = 0.8;
+        selectedPlaceIndex = prevSelected;
+        paintPlaces();
+        tag.remove();
+        labels.splice(labels.findIndex((l) => l.el === tag), 1);
+        for (const o of [...unlockFx.children]) {
+          unlockFx.remove(o);
+          const m = o as THREE.Mesh;
+          if (m.geometry !== ringGeo) m.geometry.dispose();
+          (m.material as THREE.Material).dispose();
+        }
+        return false;
+      };
+      if (reducedMotion) {
+        // no motion: the landmark is simply there, with its stats for the length of the hold
+        unlocking = { t0: T0 - END * 1000, step };
+      } else {
+        object.scale.set(1, 0.001, 1);
+        unlocking = { t0: T0, step };
+      }
+      invalidate();
+      return Math.round((reducedMotion ? hold + fade : total) * 1000);
     };
 
     const ro = new ResizeObserver(resize);
@@ -1163,7 +1549,11 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     applyFlat();
     setSelected(initial.current.selectedId);
     setRegion(initial.current.selectedRegion);
-    api.current = { setMode, zoom, reset, setSelected, setRegion };
+    setPlace(initial.current.selectedPlace);
+    const focus = initial.current.focusPlace ? places.find((p) => p.key === initial.current.focusPlace) : undefined;
+    if (focus) flyToPoint(focus.pos);
+    api.current = { setMode, zoom, reset, setSelected, setRegion, setPlace, unlock };
+    callbacks.current.onReady?.();
     raf = requestAnimationFrame(tick);
 
     return () => {
@@ -1193,16 +1583,18 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       labelEl.replaceChildren();
       api.current = null;
     };
-  }, [terrain, timeZone, unit, regions, theme]);
+  }, [terrain, timeZone, unit, regions, theme, frontier, landmarks]);
 
   useEffect(() => api.current?.setMode(tilted), [tilted]);
   useEffect(() => api.current?.setSelected(selectedId), [selectedId]);
   useEffect(() => api.current?.setRegion(selectedRegion), [selectedRegion]);
+  useEffect(() => api.current?.setPlace(selectedPlace), [selectedPlace]);
 
   useImperativeHandle(ref, () => ({
     zoomIn: () => api.current?.zoom(1.6),
     zoomOut: () => api.current?.zoom(1 / 1.6),
     reset: () => api.current?.reset(),
+    unlock: (key, info) => api.current?.unlock(key, info) ?? 0,
   }));
 
   return (

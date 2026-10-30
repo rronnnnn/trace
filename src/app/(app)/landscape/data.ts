@@ -3,7 +3,7 @@ import "server-only";
 import { buildWindow, parseRange, type ExploreSession, type RecordKind } from "@/lib/landscape/explore";
 import { requireProfile } from "@/lib/supabase/server";
 import { getTimeZone } from "@/lib/timezone";
-import { loadWorldHistory } from "@/lib/landscape/world-history";
+import { loadRoutineKeys, loadWorldHistory } from "@/lib/landscape/world-history";
 
 const ID = /^[0-9a-f-]{36}$|^name:.{1,80}$/i;
 export const param = (v: string | string[] | undefined) => (typeof v === "string" && ID.test(v) ? v : null);
@@ -19,19 +19,23 @@ export async function loadLandscape(sp: Record<string, string | string[] | undef
   ]);
   const win = buildWindow(range, now, tz, first?.ended_at);
 
-  const { data, error } = await supabase
-    .from("workout_sessions")
-    .select(
-      "id, template_id, template_name, started_at, ended_at, total_volume, completed_sets, is_sample, session_exercises(id, exercise_id, exercise_name, position, session_sets(id, position, weight, reps, completed)), personal_records(exercise_id, session_set_id, kind, value, weight, reps, is_baseline)",
-    )
-    .gte("ended_at", win.start)
-    .order("ended_at")
-    .limit(1000);
+  const [{ data, error }, routineKeys] = await Promise.all([
+    supabase
+      .from("workout_sessions")
+      .select(
+        "id, template_id, template_name, started_at, ended_at, total_volume, completed_sets, is_sample, session_exercises(id, exercise_id, exercise_name, position, session_sets(id, position, weight, reps, completed)), personal_records(exercise_id, session_set_id, kind, value, weight, reps, is_baseline)",
+      )
+      .gte("ended_at", win.start)
+      .order("ended_at")
+      .limit(1000),
+    loadRoutineKeys(supabase),
+  ]);
   if (error) throw error;
 
   const sessions: ExploreSession[] = data.map((s) => ({
     id: s.id,
-    templateId: s.template_id,
+    // the routine it was logged with, even after that routine is deleted: its range stays put
+    templateId: routineKeys.get(s.id) ?? s.template_id,
     templateName: s.template_name ?? "Session",
     startedAt: s.started_at,
     endedAt: s.ended_at,

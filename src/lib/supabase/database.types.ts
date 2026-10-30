@@ -101,6 +101,8 @@ export type Database = {
           owner_id: string;
           template_id: string | null;
           template_name: string | null;
+          /** the routine id the session was logged with; survives the routine's deletion */
+          routine_key: string | null;
           started_at: string;
           ended_at: string;
           notes: string | null;

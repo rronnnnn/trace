@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconExercises, IconGoal, IconHistory, IconLandscape, IconReflection, IconToday, IconTrain } from "@/components/icons";
+import { IconAtlas, IconExercises, IconGoal, IconHistory, IconLandscape, IconReflection, IconToday, IconTrain } from "@/components/icons";
 import { Wordmark } from "@/components/wordmark";
 import { ThemeSwitch } from "./theme-switch";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,7 @@ const PRIMARY = [
 
 /** On desktop these sit with the rest; on mobile the tab bar holds five, so they live in the menu sheet. */
 export const SECONDARY = [
+  { href: "/atlas", label: "Atlas", icon: IconAtlas },
   { href: "/exercises", label: "Exercises", icon: IconExercises },
   { href: "/reflections", label: "Reflections", icon: IconReflection },
 ] as const;

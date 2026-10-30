@@ -18,9 +18,13 @@ import type { Landmark } from "@/lib/landscape/terrain";
 import { buildWorld, growthBetween, growthSentence, type WorldSession } from "@/lib/landscape/world";
 import { formatShortDate, formatWeight, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { dayKey } from "@/lib/dates";
 import { SessionDetail } from "./landscape-explorer";
 import { markerLabel } from "./landscape-parts";
-import type { Terrain3DHandle } from "./terrain-3d";
+import { UNLOCK, type PlaceKey, type Terrain3DHandle } from "./terrain-3d";
+import { earnedLandmarks, landmarksSince, summits as summitList, type WorldLandmark } from "@/lib/landscape/landmarks";
+import { placeOf } from "@/lib/atlas";
+import { frontierGrid, frontierReach, landmarkSpots, summitSpots } from "@/lib/landscape/frontier";
 
 // three.js is heavy; load it only on this screen, and only in the browser.
 const Terrain3D = dynamic(() => import("./terrain-3d").then((m) => m.Terrain3D), {
@@ -28,7 +32,7 @@ const Terrain3D = dynamic(() => import("./terrain-3d").then((m) => m.Terrain3D),
   loading: () => <p className="absolute inset-0 grid place-items-center text-sm text-ink-3">Raising the terrain…</p>,
 });
 
-type Selection = { kind: "session"; id: string } | { kind: "rest"; span: RestSpan } | { kind: "region"; key: string } | null;
+type Selection = { kind: "place"; key: PlaceKey } | { kind: "session"; id: string } | { kind: "rest"; span: RestSpan } | { kind: "region"; key: string } | null;
 
 const subscribeTheme = (fn: () => void) => {
   const mq = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
@@ -70,7 +74,7 @@ function markSeen(uid: string, asOf: string) {
 // each probe would otherwise open a WebGL context. Browsers cap live contexts, and after enough
 // are lost Chrome blocks WebGL for the site, so the probe also releases its context straight away.
 let webglSupport: boolean | undefined;
-function hasWebGL() {
+export function hasWebGL() {
   if (webglSupport !== undefined) return webglSupport;
   try {
     const c = document.createElement("canvas");
@@ -98,7 +102,10 @@ export function LandscapeExplore({
   unit,
   trainingDays,
   onRangeChange,
+  focus = null,
 }: {
+  /** a landmark or summit to locate (e.g. from the Atlas) */
+  focus?: PlaceKey | null;
   sessions: ExploreSession[];
   /** the whole history: the world is built from it, the period only chooses what is shown */
   history: WorldSession[];
@@ -163,7 +170,45 @@ export function LandscapeExplore({
     const sentence = growthSentence(changes, grew ? "workout" : "visit");
     return sentence ? { before, sentence, focus: changes[0].key } : null;
   }, [terrain, worldOpts, grew, seen, latest]);
+  // landmarks and the frontier: derived from the whole history, never stored
+  const landmarkList = useMemo(() => earnedLandmarks(history, { unit, timeZone }), [history, unit, timeZone]);
+  const frontier = useMemo(() => {
+    if (!client) return null;
+    const all = summitList(landmarkList, unit);
+    const spots = summitSpots(seed, all.length);
+    const found = all.filter((x) => x.landmark).map((x) => x.slot);
+    return { grid: frontierGrid(seed, spots, frontierReach(history.length), found), spots, summits: all };
+  }, [client, landmarkList, unit, seed, history.length]);
+  const spots = useMemo(() => (terrain ? landmarkSpots(landmarkList, terrain.placed) : []), [terrain, landmarkList]);
   const [growthDone, setGrowthDone] = useState(false);
+
+  // landmarks earned since the last visit rise into the world once (at most three, oldest first),
+  // after any growth has played. Nothing is shown outside the landscape.
+  const fresh = useMemo(() => landmarksSince(landmarkList, seen).slice(-3), [landmarkList, seen]);
+  const [ready, setReady] = useState(false);
+  const onReady = useCallback(() => setReady(true), []);
+  const [played, setPlayed] = useState(0);
+  const [unlocking, setUnlocking] = useState<{ landmark: WorldLandmark; reduced: boolean } | null>(null);
+  useEffect(() => {
+    if (!ready || unlocking || played >= fresh.length || (growth && !growthDone)) return;
+    const l = fresh[played];
+    const first = l.stats[0];
+    const ms =
+      scene.current?.unlock(placeOf(l), {
+        stats: `${l.routine} · ${formatShortDate(l.at, timeZone)}`,
+        accent: l.exercise && first ? `${l.exercise} · ${first.value}` : first ? `${first.label}: ${first.value}` : null,
+      }) ?? 0;
+    if (!ms) {
+      setPlayed((n) => n + 1);
+      return;
+    }
+    setUnlocking({ landmark: l, reduced: Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) });
+    const t = setTimeout(() => {
+      setUnlocking(null);
+      setPlayed((n) => n + 1);
+    }, ms + 250);
+    return () => clearTimeout(t);
+  }, [ready, unlocking, played, fresh, growth, growthDone, timeZone]);
   useEffect(() => {
     // the world has been seen as it is now; a shared ?grew link should not replay on refresh
     if (!client || !latest) return;
@@ -222,6 +267,7 @@ export function LandscapeExplore({
     // while the terrain grows, the range that grew most is lit
     (growth && !growthDone ? growth.focus : null);
   const onClear = useCallback(() => setSelected(null), [setSelected]);
+  const onSelectPlace = useCallback((key: PlaceKey) => setSelected({ kind: "place", key }), [setSelected]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -275,6 +321,12 @@ export function LandscapeExplore({
             tilted={tilted}
             selectedId={selectedSession?.id ?? null}
             selectedRegion={litRegion}
+            frontier={frontier}
+            landmarks={spots}
+            selectedPlace={selected?.kind === "place" ? selected.key : null}
+            focusPlace={focus}
+            onSelectPlace={onSelectPlace}
+            onReady={onReady}
             regions={regions}
             theme={themeVersion}
             onSelectSession={onSelectSession}
@@ -305,6 +357,8 @@ export function LandscapeExplore({
             </li>
           ))}
         </ul>
+
+        {unlocking ? <UnlockTitle key={unlocking.landmark.id} landmark={unlocking.landmark} reduced={unlocking.reduced} /> : null}
 
         {/* what grew, in one factual line */}
         {growth && !toastGone ? (
@@ -391,6 +445,15 @@ export function LandscapeExplore({
             <div className="overflow-y-auto overscroll-contain px-5 pb-[calc(env(safe-area-inset-bottom)+20px)] compact:pt-1 roomy:p-5">
               {selectedSession ? (
                 <SessionDetail session={selectedSession} exerciseId={null} unit={unit} timeZone={timeZone} onClose={onClear} />
+              ) : selected.kind === "place" ? (
+                <PlaceDetail
+                  place={selected.key}
+                  landmarks={landmarkList}
+                  summits={frontier?.summits ?? []}
+                  timeZone={timeZone}
+                  onOpen={(id) => setSelected({ kind: "session", id })}
+                  onClose={onClear}
+                />
               ) : selected.kind === "rest" ? (
                 <RestDetail span={selected.span} onClose={onClear} />
               ) : selectedRegion ? (
@@ -563,5 +626,107 @@ function RestDetail({ span, onClose }: { span: RestSpan; onClose: () => void }) 
         widens.
       </p>
     </section>
+  );
+}
+
+function PlaceDetail({
+  place,
+  landmarks,
+  summits,
+  timeZone,
+  onOpen,
+  onClose,
+}: {
+  place: PlaceKey;
+  landmarks: ReturnType<typeof earnedLandmarks>;
+  summits: ReturnType<typeof summitList>;
+  timeZone: string;
+  onOpen: (sessionId: string) => void;
+  onClose: () => void;
+}) {
+  const summit = place.startsWith("summit:") ? summits.find((x) => `summit:${x.slot}` === place) : undefined;
+  const l = summit ? summit.landmark : landmarks.find((x) => `landmark:${x.id}` === place);
+  return (
+    <section aria-label={l ? l.title : "Uncharted summit"}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="eyebrow">{summit ? "Summit" : l ? l.category : "Landmark"}</p>
+          <h2 className="mt-2 font-serif text-[24px] leading-tight">{summit ? (summit.name ?? "Uncharted summit") : l?.title}</h2>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="-mr-2 flex size-9 items-center justify-center rounded-md text-ink-3 hover:bg-sunken hover:text-ink"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.4" aria-hidden>
+            <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
+          </svg>
+        </button>
+      </div>
+      {l ? (
+        <>
+          <p className="num mt-3 text-sm text-ink-2">
+            {formatShortDate(l.at, timeZone)} · {l.routine}
+            {l.sample ? " · Sample" : ""}
+          </p>
+          <p className="mt-3 text-sm text-ink-2">{summit ? `${l.title}. ${l.description}` : l.description}</p>
+          <dl className="num mt-5 grid grid-cols-2 gap-4 border-y border-line py-4">
+            {l.stats.map((st) => (
+              <div key={st.label}>
+                <dd className="text-[15px] font-medium leading-tight">{st.value}</dd>
+                <dt className="mt-1 text-[11px] text-ink-3">{st.label}</dt>
+              </div>
+            ))}
+          </dl>
+          <button
+            type="button"
+            onClick={() => onOpen(l.sessionId)}
+            className="mt-5 flex h-10 w-full items-center justify-center rounded-md border border-line-strong text-[13px] text-ink-2 hover:border-ink-3 hover:text-ink"
+          >
+            The workout that earned it
+          </button>
+          <Link
+            href={`/atlas?on=${dayKey(l.at, timeZone)}`}
+            className="mt-2 flex h-10 w-full items-center justify-center rounded-md text-[13px] text-ink-3 hover:text-ink"
+          >
+            See your world that day in the Atlas
+          </Link>
+        </>
+      ) : (
+        <p className="mt-3 text-sm text-ink-3">Out on the frontier, still in mist. Something in your training will reach it.</p>
+      )}
+    </section>
+  );
+}
+
+/** The Reveal beat of the landmark unlock: a rule draws across, the kind, then the name. */
+function UnlockTitle({ landmark: l, reduced }: { landmark: WorldLandmark; reduced: boolean }) {
+  // authored times (s) from the scene's timeline, so the words land with the leader line
+  const at = (s: number) => (reduced ? "0ms" : `${Math.round(s * 1000)}ms`);
+  const leave = UNLOCK.end + UNLOCK.hold - (reduced ? UNLOCK.end : 0);
+  return (
+    <div
+      aria-live="polite"
+      className="pointer-events-none absolute inset-x-6 bottom-[calc(env(safe-area-inset-bottom)+76px)] z-10 flex max-w-[640px] flex-col gap-3 roomy:inset-x-10 roomy:bottom-20"
+      style={{ animation: `fade-out ${UNLOCK.fade * 1000}ms ease-in ${at(leave)} both` }}
+    >
+      <div
+        className="h-px origin-left bg-ink/60"
+        style={{ animation: `unlock-draw 600ms cubic-bezier(0.65,0,0.35,1) ${at(UNLOCK.reveal - 0.05)} both` }}
+      />
+      <p
+        className="text-[12px] font-medium uppercase tracking-[0.18em] text-ink-3"
+        style={{ animation: `unlock-rise 450ms var(--ease-out) ${at(UNLOCK.reveal + 0.05)} both`, textShadow: "0 0 10px var(--paper)" }}
+      >
+        {l.summit ? "Summit discovered" : "Landmark unlocked"}
+      </p>
+      <p
+        className="font-serif text-[40px] leading-[1.02] tracking-[-0.01em] text-ink [text-wrap:balance] roomy:text-[56px]"
+        style={{ animation: `unlock-rise 450ms var(--ease-out) ${at(UNLOCK.reveal + 0.18)} both`, textShadow: "0 0 14px var(--paper)" }}
+      >
+        {l.summit ? l.summit.name : l.title}
+      </p>
+    </div>
   );
 }
