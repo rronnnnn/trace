@@ -32,12 +32,15 @@ export default async function TrainPage() {
         <div>
           <h1 className="font-serif text-[36px] leading-[1.05] tracking-[-0.02em] sm:text-[52px]">Train</h1>
           <p className="mt-3 max-w-xl text-ink-2">
-            Your routines. Starting one copies it into a session, so later edits never rewrite history.
+            Your routines, and runs. Starting a routine copies it into a session, so later edits never rewrite history.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Link href="/train/exercises" className={buttonClass({ variant: "ghost" })}>
             Exercises
+          </Link>
+          <Link href="/run" className={buttonClass({ variant: "secondary" })}>
+            Start a run
           </Link>
           <FreestyleButton uid={userId} />
           <Link href="/train/new" className={buttonClass()}>
@@ -60,7 +63,7 @@ export default async function TrainPage() {
             return (
               <li
                 key={t.id}
-                className="grid gap-x-10 gap-y-5 border-b border-line py-8 md:grid-cols-[minmax(0,4fr)_minmax(0,6fr)_auto] md:items-start"
+                className="grid grid-cols-[minmax(0,1fr)] gap-x-10 gap-y-5 border-b border-line py-8 md:grid-cols-[minmax(0,4fr)_minmax(0,6fr)_auto] md:items-start"
               >
                 <div>
                   <p className="eyebrow num">{String(n + 1).padStart(2, "0")}</p>

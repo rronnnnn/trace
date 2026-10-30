@@ -41,7 +41,7 @@ export default async function ReflectionsPage() {
         </p>
       </header>
 
-      <section aria-labelledby="this-week" className="mt-10 grid gap-8 border-t border-ink/80 pt-8 md:grid-cols-[minmax(0,6fr)_minmax(0,5fr)] md:gap-12">
+      <section aria-labelledby="this-week" className="mt-10 grid grid-cols-[minmax(0,1fr)] gap-8 border-t border-ink/80 pt-8 md:grid-cols-[minmax(0,6fr)_minmax(0,5fr)] md:gap-12">
         <div>
           <p className="eyebrow num" id="this-week">
             This week · {weekLabel(current)}

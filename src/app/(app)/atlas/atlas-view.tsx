@@ -82,7 +82,7 @@ export function AtlasView({
   const isNow = at === now;
 
   const past = useMemo(() => history.filter((s) => s.endedAt <= at), [history, at]);
-  const then = useMemo(() => landmarks.filter((l) => l.at <= at), [landmarks, at]);
+  const then = useMemo(() => landmarks.filter((l) => l.at <= at && !l.runId), [landmarks, at]);
   const world = useMemo(() => {
     if (!client || !past.length) return null;
     const start = new Date(`${weekStart(dayKey(first, timeZone))}T00:00:00Z`);
@@ -148,7 +148,7 @@ export function AtlasView({
             {isNow ? "Your world today" : `Your world on ${formatLongDate(at, timeZone)}`}
           </h2>
           <p className="num text-[13px] text-ink-3">
-            {plural(past.length, "workout")} · {plural(new Set(past.map((s) => s.templateKey)).size, "range")} · {plural(then.length, "landmark")}
+            {plural(past.length, "workout")} · {plural(new Set(past.map((s) => s.templateKey)).size, "range")} · {plural(then.length, "landmark")} in the world
           </p>
         </div>
 
@@ -259,7 +259,7 @@ export function AtlasView({
               )}
             >
               {f === "all" ? "All" : f === "summits" ? "Summits" : CATEGORIES.find((c) => c.id === f)!.label}
-              <span className={cn("num text-[11px]", filter === f ? "text-paper/70" : "text-ink-4")}>{counts(f)}</span>
+              <span className={cn("num text-[11px]", filter === f ? "text-paper/70" : "text-ink-3")}>{counts(f)}</span>
             </button>
           ))}
         </div>
@@ -330,17 +330,19 @@ export function AtlasView({
                               >
                                 See your world that day
                               </button>
+                              {l.runId ? null : (
+                                <Link
+                                  href={`/landscape/explore?range=all&place=${encodeURIComponent(placeOf(l))}`}
+                                  className="flex h-9 items-center rounded-md border border-line-strong px-3.5 text-[13px] text-ink-2 hover:border-ink-3 hover:text-ink"
+                                >
+                                  Show in landscape
+                                </Link>
+                              )}
                               <Link
-                                href={`/landscape/explore?range=all&place=${encodeURIComponent(placeOf(l))}`}
+                                href={l.runId ? `/runs/${l.runId}` : `/history/${l.sessionId}`}
                                 className="flex h-9 items-center rounded-md border border-line-strong px-3.5 text-[13px] text-ink-2 hover:border-ink-3 hover:text-ink"
                               >
-                                Show in landscape
-                              </Link>
-                              <Link
-                                href={`/history/${l.sessionId}`}
-                                className="flex h-9 items-center rounded-md border border-line-strong px-3.5 text-[13px] text-ink-2 hover:border-ink-3 hover:text-ink"
-                              >
-                                The workout
+                                {l.runId ? "The run" : "The workout"}
                               </Link>
                             </div>
                           </div>
@@ -365,6 +367,12 @@ function Glyph({ landmark: l, className }: { landmark: WorldLandmark; className?
     return (
       <svg {...common}>
         <path d="M1 11.5 5 4l2 3 1.5-2.5L12 11.5Z" strokeLinejoin="round" />
+      </svg>
+    );
+  if (l.category === "running")
+    return (
+      <svg {...common}>
+        <path d="M1.5 9.5c2-3 4-3 5 0s3 3 5 0" strokeLinecap="round" />
       </svg>
     );
   if (l.category === "consistency")

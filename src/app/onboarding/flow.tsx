@@ -108,7 +108,7 @@ export function OnboardingFlow({ defaultName }: { defaultName: string }) {
             )}
             {step === 3 && (
               <Step title="What do you have access to?" hint="We'll pick exercise alternatives for anything missing.">
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid grid-cols-[minmax(0,1fr)] gap-2 sm:grid-cols-2">
                   {EQUIPMENT_OPTIONS.map((o) => {
                     const on = equipment.includes(o.id);
                     return (

@@ -67,6 +67,7 @@ function payload(over: { [k: string]: Json } = {}): Payload {
 }
 
 async function wipeB() {
+  await B.from("runs").delete().eq("owner_id", bUid);
   await B.from("goals").delete().eq("owner_id", bUid);
   await B.from("workout_sessions").delete().eq("owner_id", bUid);
   await B.from("workout_templates").delete().eq("owner_id", bUid);
@@ -492,6 +493,58 @@ d("database audit", () => {
         }),
       });
       expect((await B.from("workout_sessions").select("id").eq("id", id)).data).toEqual([]);
+    });
+  });
+
+  describe("runs", () => {
+    const run = (over: Record<string, unknown> = {}) => ({
+      id: uuid(),
+      kind: "outdoor" as const,
+      source: "gps" as const,
+      started_at: "2026-10-02T07:00:00Z",
+      ended_at: "2026-10-02T07:30:00Z",
+      elapsed_seconds: 1800,
+      moving_seconds: 1750,
+      distance_m: 5000,
+      route: { v: 1, points: [[52, 13, 0, 5, null, 0], [52.01, 13, 300000, 5, null, 0]] },
+      ...over,
+    });
+
+    it("keeps a run and its route private to its owner", async () => {
+      const r = run();
+      expect((await B.from("runs").insert(r)).error).toBeNull();
+      expect((await A.from("runs").select("id").eq("id", r.id)).data).toEqual([]);
+      expect((await anon.from("runs").select("id").eq("id", r.id)).data ?? []).toEqual([]);
+      // A can neither change nor delete it
+      await A.from("runs").update({ title: "mine now" }).eq("id", r.id);
+      await A.from("runs").delete().eq("id", r.id);
+      const { data } = await B.from("runs").select("title, route").eq("id", r.id).single();
+      expect(data!.title).toBeNull();
+      expect(data!.route).not.toBeNull();
+      // nor write one as B
+      expect((await A.from("runs").insert({ ...run(), owner_id: bUid })).error).not.toBeNull();
+    });
+
+    it("a retried save never makes a second run", async () => {
+      const r = run();
+      await B.from("runs").upsert(r, { onConflict: "id", ignoreDuplicates: true });
+      await B.from("runs").upsert(r, { onConflict: "id", ignoreDuplicates: true });
+      expect((await B.from("runs").select("id").eq("id", r.id)).data).toHaveLength(1);
+    });
+
+    it("deleting a run deletes its route with it", async () => {
+      const r = run();
+      await B.from("runs").insert(r);
+      await B.from("runs").delete().eq("id", r.id);
+      expect((await B.from("runs").select("id, route").eq("id", r.id)).data).toEqual([]);
+    });
+
+    it("rejects impossible runs", async () => {
+      const code = async (over: Record<string, unknown>) => (await B.from("runs").insert(run(over))).error?.code;
+      expect(await code({ moving_seconds: 2000 })).toBe("23514"); // moving longer than elapsed
+      expect(await code({ ended_at: "2026-10-02T06:00:00Z" })).toBe("23514");
+      expect(await code({ kind: "treadmill" })).toBe("23514"); // a treadmill has no route
+      expect(await code({ distance_m: -1 })).toBe("23514");
     });
   });
 });

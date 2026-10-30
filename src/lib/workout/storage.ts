@@ -56,3 +56,34 @@ export const libraryCache = {
   load: (uid: string) => (store ? get<ExerciseRef[]>(`library:${uid}`, store) : Promise.resolve(undefined)),
   save: (uid: string, items: ExerciseRef[]) => (store ? set(`library:${uid}`, items, store) : Promise.resolve()),
 };
+
+/**
+ * Runs, kept the same way:
+ *  - run-active:<uid>  the run being recorded (saved every few seconds, so a reload recovers it)
+ *  - run-outbox:<uid>  finished runs not yet confirmed by the server
+ */
+export const activeRunStore = {
+  load: <T>(uid: string) => (store ? get<T>(`run-active:${uid}`, store) : Promise.resolve(undefined)),
+  save: <T>(uid: string, run: T) => (store ? set(`run-active:${uid}`, run, store) : Promise.resolve()),
+  clear: (uid: string) => (store ? del(`run-active:${uid}`, store) : Promise.resolve()),
+};
+
+export type RunOutboxItem<T> = { row: T & { id: string }; queuedAt: number; attempts: number; lastError: string | null; rejected?: boolean };
+
+export const runOutbox = {
+  list: async <T>(uid: string) => (store ? ((await get<RunOutboxItem<T>[]>(`run-outbox:${uid}`, store)) ?? []) : []),
+  enqueue: <T>(uid: string, row: T & { id: string }) =>
+    store
+      ? update<RunOutboxItem<T>[]>(`run-outbox:${uid}`, (items = []) => [...items.filter((i) => i.row.id !== row.id), { row, queuedAt: Date.now(), attempts: 0, lastError: null }], store)
+      : Promise.resolve(),
+  remove: (uid: string, id: string) =>
+    store ? update<RunOutboxItem<unknown>[]>(`run-outbox:${uid}`, (items = []) => items.filter((i) => i.row.id !== id), store) : Promise.resolve(),
+  markFailed: (uid: string, id: string, error: string, rejected = false) =>
+    store
+      ? update<RunOutboxItem<unknown>[]>(
+          `run-outbox:${uid}`,
+          (items = []) => items.map((i) => (i.row.id === id ? { ...i, attempts: i.attempts + 1, lastError: error, rejected } : i)),
+          store,
+        )
+      : Promise.resolve(),
+};

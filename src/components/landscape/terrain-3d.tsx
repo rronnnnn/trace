@@ -10,7 +10,7 @@ import type { LandmarkCategory, Summit, WorldLandmark } from "@/lib/landscape/la
 import { edgeFalloff, riverMesh, SIZE_X, SIZE_Z, terrainMesh, toWorld, type MeshPalette } from "@/lib/landscape/mesh";
 import { parseColor, type RGB } from "@/lib/landscape/relief";
 import type { RestSpan } from "@/lib/landscape/rest";
-import type { Landmark } from "@/lib/landscape/terrain";
+import { hashString, type Landmark } from "@/lib/landscape/terrain";
 import type { World } from "@/lib/landscape/world";
 import { formatShortDate, formatVolume, formatWeight, plural } from "@/lib/format";
 
@@ -542,95 +542,114 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
     leader.visible = false;
     world.add(halo, leader);
 
-    // ── landmarks: small stone forms beside the sessions that earned them, and cairns on the
-    // summits reached. Matte stone, one silhouette per kind; sage only when selected.
-    type Place = { key: PlaceKey; pos: THREE.Vector3; top: THREE.Vector3; object: THREE.Object3D; title: string; sub: string };
+    // ── landmarks: slim flags beside the sessions that earned them, and on the summits reached.
+    // A hairline pole and a thin, unlit pennant (no shading, so nothing looks moulded); one
+    // pennant shape per kind; sage, brighter when selected. They keep a modest size on screen:
+    // zoomed in, they shrink rather than fill the view.
+    type Place = {
+      key: PlaceKey;
+      pos: THREE.Vector3;
+      /** the flag's top, kept in step with its on-screen scale (picking, labels) */
+      top: THREE.Vector3;
+      label: THREE.Vector3;
+      height: number;
+      object: THREE.Object3D;
+      title: string;
+      sub: string;
+    };
     const places: Place[] = [];
     const placeGroup = new THREE.Group();
     world.add(placeGroup);
-    const stone = new THREE.MeshStandardMaterial({ color: cssColor("--ink-2", [85, 82, 75]), roughness: 0.85, metalness: 0 });
-    const stoneLit = new THREE.MeshStandardMaterial({
-      color: sage,
-      emissive: sage,
-      emissiveIntensity: dark ? 0.35 : 0.15,
-      roughness: 0.8,
-      metalness: 0,
-    });
-    const footMat = new THREE.MeshBasicMaterial({ color: sage, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
-    const cairn = (scale = 1) => {
-      const g = new THREE.Group();
-      [0.46, 0.34, 0.22].forEach((r, i, all) => {
-        const m = new THREE.Mesh(new THREE.DodecahedronGeometry(r * scale, 0), stone);
-        m.scale.y = 0.62;
-        m.position.y = all.slice(0, i).reduce((y, q) => y + q * 1.1 * scale, r * 0.55 * scale);
-        m.rotation.y = i * 0.9;
-        g.add(m);
-      });
-      return g;
+    const poleMat = new THREE.MeshBasicMaterial({ color: cssColor("--ink-2", [85, 82, 75]) });
+    const flagMat = new THREE.MeshBasicMaterial({ color: sage, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
+    const flagLit = new THREE.MeshBasicMaterial({ color: sage.clone().lerp(new THREE.Color(1, 1, 1), dark ? 0.35 : 0.12), side: THREE.DoubleSide });
+    const footMat = new THREE.MeshBasicMaterial({ color: sage, transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide });
+    const pennant = (kind: LandmarkCategory | "summit") => {
+      const w = kind === "summit" ? 0.9 : 0.62;
+      const h = kind === "summit" ? 0.5 : 0.36;
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0);
+      if (kind === "journey" || kind === "running") {
+        shape.lineTo(w, -h / 2); // a simple pennant
+        shape.lineTo(0, -h);
+      } else if (kind === "strength" || kind === "summit") {
+        shape.lineTo(w, 0); // swallowtail
+        shape.lineTo(w * 0.72, -h / 2);
+        shape.lineTo(w, -h);
+        shape.lineTo(0, -h);
+      } else {
+        shape.lineTo(w, -0.03); // consistency: a plain flag, the fly edge drooping a touch
+        shape.lineTo(w, -h - 0.03);
+        shape.lineTo(0, -h);
+      }
+      shape.closePath();
+      const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), flagMat);
+      m.userData.flag = true;
+      return m;
     };
-    const form = (category: LandmarkCategory) => {
-      if (category === "consistency") return cairn();
+    const flag = (kind: LandmarkCategory | "summit", height: number, turn: number) => {
       const g = new THREE.Group();
-      const m =
-        category === "strength"
-          ? new THREE.Mesh(new THREE.ConeGeometry(0.34, 2.1, 4), stone) // a slim four-sided spire
-          : new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.3, 1.5, 5), stone); // a standing stone
-      m.position.y = category === "strength" ? 1.05 : 0.75;
-      m.rotation.y = 0.4;
-      g.add(m);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, height, 6), poleMat);
+      pole.position.y = height / 2;
+      const p = pennant(kind);
+      p.position.set(0.02, height - 0.02, 0);
+      g.add(pole, p);
+      g.rotation.y = turn; // facing the viewer, give or take: never seen edge-on from home
       return g;
     };
     const foot = (r: number) => {
       // a faint ring on the ground, so the place still reads in the flat map
-      const m = new THREE.Mesh(new THREE.RingGeometry(r * 0.72, r, 28), footMat);
+      const m = new THREE.Mesh(new THREE.RingGeometry(r * 0.6, r, 24), footMat);
       m.rotation.x = -Math.PI / 2;
-      m.position.y = 0.06;
+      m.position.y = 0.05;
       return m;
     };
-    for (const { landmark: l, x, y } of landmarks) {
-      const g = form(l.category);
-      g.add(foot(1));
-      const pos = new THREE.Vector3(...toWorld(x, y, mesh.heightAt, 0));
+    const turnOf = (key: string) => ((hashString(key) % 1000) / 1000 - 0.5) * 0.7;
+    const addPlace = (key: PlaceKey, pos: THREE.Vector3, g: THREE.Object3D, height: number, title: string, sub: string) => {
       g.position.copy(pos);
       placeGroup.add(g);
-      places.push({
-        key: `landmark:${l.id}`,
-        pos,
-        top: pos.clone().add(new THREE.Vector3(0, l.category === "strength" ? 2.3 : 1.7, 0)),
-        object: g,
-        title: l.title,
-        sub: formatShortDate(l.at, timeZone),
-      });
+      places.push({ key, pos, top: pos.clone().add(new THREE.Vector3(0, height, 0)), label: pos.clone().add(new THREE.Vector3(0, height + 1.2, 0)), height, object: g, title, sub });
+    };
+    for (const { landmark: l, x, y } of landmarks) {
+      const g = new THREE.Group();
+      g.add(flag(l.category, 1.7, turnOf(l.id)), foot(0.38));
+      addPlace(`landmark:${l.id}`, new THREE.Vector3(...toWorld(x, y, mesh.heightAt, 0)), g, 1.7, l.title, formatShortDate(l.at, timeZone));
     }
     if (frontier) {
       for (const s of frontier.summits) {
         const spot = frontier.spots[s.slot];
         if (!spot) continue;
-        const h = frontier.grid.heightAt(spot.x, spot.z);
-        const pos = new THREE.Vector3(spot.x, h, spot.z);
         const g = new THREE.Group();
-        g.position.copy(pos);
-        if (s.landmark) {
-          g.add(cairn(1.25));
-          g.add(foot(1.6));
-        }
-        placeGroup.add(g);
-        places.push({
-          key: `summit:${s.slot}`,
-          pos,
-          top: pos.clone().add(new THREE.Vector3(0, s.landmark ? 2.2 : 0.8, 0)),
-          object: g,
-          title: s.name ?? "Uncharted summit",
-          sub: s.landmark ? formatShortDate(s.landmark.at, timeZone) : "Not yet reached",
-        });
+        if (s.landmark) g.add(flag("summit", 2.4, turnOf(s.id)), foot(0.55));
+        addPlace(
+          `summit:${s.slot}`,
+          new THREE.Vector3(spot.x, frontier.grid.heightAt(spot.x, spot.z), spot.z),
+          g,
+          s.landmark ? 2.4 : 0.6,
+          s.name ?? "Uncharted summit",
+          s.landmark ? formatShortDate(s.landmark.at, timeZone) : "Not yet reached",
+        );
       }
     }
+    // the flags' size on screen: full size from the home view, smaller as the camera comes close
+    let placeScale = 1;
+    let unlockingObject: THREE.Object3D | null = null;
+    const rescalePlaces = (d: number) => {
+      const next = Math.min(1, Math.max(0.4, d / 80));
+      if (Math.abs(next - placeScale) < 0.01) return;
+      placeScale = next;
+      for (const p of places) {
+        if (p.object !== unlockingObject) p.object.scale.setScalar(placeScale);
+        p.top.copy(p.pos).add(new THREE.Vector3(0, p.height * placeScale, 0));
+        p.label.copy(p.pos).add(new THREE.Vector3(0, p.height * placeScale + 1.2, 0));
+      }
+    };
     let selectedPlaceIndex = -1;
     const paintPlaces = () => {
       places.forEach((p, i) =>
         p.object.traverse((o) => {
           const m = o as THREE.Mesh;
-          if (m.isMesh && m.material !== footMat) m.material = i === selectedPlaceIndex ? stoneLit : stone;
+          if (m.isMesh && m.userData.flag) m.material = i === selectedPlaceIndex ? flagLit : flagMat;
         }),
       );
     };
@@ -875,7 +894,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
       tag.className = "pointer-events-none whitespace-nowrap font-serif text-[12px] italic leading-none text-ink-2";
       tag.style.textShadow = "0 0 6px var(--paper), 0 0 2px var(--paper)";
       tag.textContent = p.title;
-      addLabel(tag, p.top.clone().add(new THREE.Vector3(0, 1.4, 0)), () => !growth && selectedPlaceIndex !== places.indexOf(p));
+      addLabel(tag, p.label, () => !growth && selectedPlaceIndex !== places.indexOf(p));
     }
 
     for (const lake of terrain.water.lakes) {
@@ -984,6 +1003,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         dirty = true;
       }
       const moved = ctl().update();
+      rescalePlaces(distance());
       const close = distance() < CLOSE;
       if (close !== lastClose) {
         lastClose = close;
@@ -1487,7 +1507,7 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         }
         // Rise: the marker pops, ripples spread, the landmark rises out of the ground
         const lift = pop(0, 1, R0 + 0.05, R0 + 0.8)(T);
-        object.scale.set(1, Math.max(0.001, lift), 1);
+        object.scale.set(placeScale, placeScale * Math.max(0.001, lift), placeScale);
         if (T >= R0 && selectedPlaceIndex !== i) {
           selectedPlaceIndex = i;
           paintPlaces();
@@ -1514,7 +1534,8 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         });
         if (T < total) return true;
         // back to the world as it was: the landmark stands, selection restored
-        object.scale.set(1, 1, 1);
+        object.scale.setScalar(placeScale);
+        unlockingObject = null;
         leader.visible = false;
         leader.scale.y = 1;
         (leader.material as THREE.LineBasicMaterial).opacity = 0.8;
@@ -1534,7 +1555,8 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         // no motion: the landmark is simply there, with its stats for the length of the hold
         unlocking = { t0: T0 - END * 1000, step };
       } else {
-        object.scale.set(1, 0.001, 1);
+        object.scale.set(placeScale, 0.001, placeScale);
+        unlockingObject = object;
         unlocking = { t0: T0, step };
       }
       invalidate();

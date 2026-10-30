@@ -184,7 +184,7 @@ export default async function ExercisePage({ params }: PageProps<"/exercises/[id
             {usesSample ? <p className="mt-2 text-[12px] text-ink-3">Includes sample sessions.</p> : null}
           </section>
 
-          <div className="mt-14 grid gap-12 md:grid-cols-2">
+          <div className="mt-14 grid grid-cols-[minmax(0,1fr)] gap-12 md:grid-cols-2">
             {weighted ? (
               <section aria-labelledby="rep-maxes">
                 <h2 id="rep-maxes" className="eyebrow">

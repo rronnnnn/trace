@@ -44,6 +44,19 @@ export const IconReflection = (p: P) => (
     <path d="M3 14.5V8M7 14.5V4M11 14.5V9.5M15 14.5V6.5" />
   </svg>
 );
+export const IconRun = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="11.5" cy="3.5" r="1.5" />
+    <path d="M6 7.5 8.5 6l3 1.5 1.5 2.5h2.5M8.5 6 7 10.5l3 2-1 3.5M7 10.5l-2.5 4H2" />
+  </svg>
+);
+export const IconInsights = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M2.5 15.5h13" />
+    <path d="M4.5 12.5 8 8.5l2.5 2.5 5-6" />
+    <path d="M12.5 5h3v3" />
+  </svg>
+);
 export const IconAtlas = (p: P) => (
   <svg {...base(p)}>
     <path d="M2.5 4.2 6.5 2.5l5 1.8 4-1.6v11.1l-4 1.7-5-1.8-4 1.6Z" />

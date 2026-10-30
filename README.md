@@ -130,6 +130,33 @@ and session notes. The person writes only how the week felt (five steps), a note
 then shows on Today and atop the next week. Data: `weekly_reflections` (one row per user and week, RLS). If the
 table is missing, the facts still render and writing is switched off. Logic: `src/lib/reflection.ts` (unit-tested).
 
+## Insights
+
+`/insights`: observations from recorded training over 4, 8 or 12 weeks, each set against the equal window before.
+No advice, scores or generated text. What moved (heaviest set, more reps at the same weight, or bodyweight reps;
+an exercise is compared only with itself, never its variations; e1RM shown as a labelled estimate), what is holding
+steady (no new best across the last four sessions over at least three weeks, judged by the best of them, so one off
+day is never a plateau; fewer than six sessions is "still building a baseline"), weekly sets per primary muscle
+(no double counting), push/pull and upper/lower balance (described only from 20 sets up), running on its own terms,
+and records from the existing record system. Logic: `src/lib/insights.ts` (pure, unit-tested).
+
+## Running
+
+`/run` records a run in the browser: an outdoor run uses the Geolocation API (asked for only on start), a treadmill
+run keeps time and takes its distance at the end. `src/lib/run/recorder.ts` is a pure state machine: fixes worse than
+30 m, faster than 8 m/s (jumps) or within the fixes' own uncertainty (standing still) are not recorded; nothing is
+recorded while paused; running time excludes pauses, elapsed time doesn't, moving time excludes standing still. The
+run is written to IndexedDB every few seconds and on hide, so a reload recovers it; finished runs go through a device
+outbox and an idempotent upsert on a device-generated id, so a retry never duplicates. Browsers usually pause
+location when the screen locks; the app says so and joins the gap with a straight line.
+
+`/runs/<id>` shows distance, pace and time, moving vs elapsed time, best pace (fastest 400 m), elevation gain only from
+reliable altitude, an SVG route (no map tiles or third parties), a pace chart and splits linked to the route, and a
+replay. `/runs` adds weekly and monthly distance, a pace trend and best efforts (1 km to marathon) from GPS outdoor
+runs only. Runs appear in History, the Atlas record (running landmarks) and Insights, and never raise the landscape.
+Data: `runs` (route stored on the row, so deleting a run deletes its route; owner-only RLS). Logic:
+`src/lib/run/` (unit-tested).
+
 ## Appearance
 
 System, Light or Dark (sidebar on desktop; account button on mobile). Every colour is a CSS token with a dark set;

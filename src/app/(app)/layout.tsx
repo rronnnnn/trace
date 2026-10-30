@@ -1,3 +1,4 @@
+import { ActiveRunBar } from "@/components/shell/active-run-bar";
 import { ActiveWorkoutBar } from "@/components/shell/active-workout-bar";
 import { MobileAccount } from "@/components/shell/mobile-account";
 import { MobileTabs, Sidebar } from "@/components/shell/nav";
@@ -27,6 +28,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
       </div>
       <MobileTabs />
       <ActiveWorkoutBar uid={userId} />
+      <ActiveRunBar uid={userId} />
       <SyncAgent uid={userId} />
       <TzSync serverTz={tz} />
     </div>

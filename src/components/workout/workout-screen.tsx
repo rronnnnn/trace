@@ -201,7 +201,7 @@ function ActiveWorkoutView({
         <RestTimer rest={workout.rest} defaultSeconds={current?.restSeconds ?? 120} dispatch={dispatch} className="w-full sm:w-auto" />
       </header>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_260px]">
+      <div className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="min-w-0">
           {/* Mobile exercise stepper */}
           {workout.exercises.length > 1 ? (

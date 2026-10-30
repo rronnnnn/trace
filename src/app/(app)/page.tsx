@@ -113,7 +113,7 @@ export default async function TodayPage() {
       {/* Today's workout beside the landscape. No container: type and hairlines carry the structure. */}
       <section
         aria-labelledby="today-workout"
-        className="mt-10 grid gap-10 border-t border-ink/80 pt-8 md:mt-12 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] md:gap-12"
+        className="mt-10 grid grid-cols-[minmax(0,1fr)] gap-10 border-t border-ink/80 pt-8 md:mt-12 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] md:gap-12"
       >
         <div className="flex flex-col">
           <p className="eyebrow" id="today-workout">
@@ -207,7 +207,7 @@ export default async function TodayPage() {
       </section>
 
       {/* Last session · This week: one strip divided by a hairline. */}
-      <div className="mt-14 grid border-t border-line md:grid-cols-2">
+      <div className="mt-14 grid grid-cols-[minmax(0,1fr)] border-t border-line md:grid-cols-2">
         <section aria-labelledby="last-session" className="py-7 md:pr-10">
           <div className="flex items-baseline justify-between gap-4">
             <h2 id="last-session" className="eyebrow">

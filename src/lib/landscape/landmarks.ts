@@ -19,12 +19,13 @@ import { addDays, dayKey, weekStart } from "@/lib/dates";
 import { formatShortDate, formatWeight } from "@/lib/format";
 import type { WorldSession } from "./world";
 
-export type LandmarkCategory = "strength" | "consistency" | "journey";
+export type LandmarkCategory = "strength" | "consistency" | "journey" | "running";
 
 export const CATEGORIES: { id: LandmarkCategory; label: string }[] = [
   { id: "journey", label: "Journey" },
   { id: "consistency", label: "Consistency" },
   { id: "strength", label: "Strength" },
+  { id: "running", label: "Running" },
 ];
 
 export type LandmarkStat = { label: string; value: string };
@@ -46,6 +47,8 @@ export type WorldLandmark = {
   summit: { slot: number; name: string } | null;
   /** earned in sample (demo) data */
   sample: boolean;
+  /** a running landmark: the run it belongs to (runs have no place in the landscape) */
+  runId?: string;
 };
 
 // ── conditions: deliberately few, each one a real step ─────────────────────────────────────

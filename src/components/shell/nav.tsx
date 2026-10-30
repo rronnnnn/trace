@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconAtlas, IconExercises, IconGoal, IconHistory, IconLandscape, IconReflection, IconToday, IconTrain } from "@/components/icons";
+import { IconAtlas, IconExercises, IconInsights, IconRun, IconGoal, IconHistory, IconLandscape, IconReflection, IconToday, IconTrain } from "@/components/icons";
 import { Wordmark } from "@/components/wordmark";
 import { ThemeSwitch } from "./theme-switch";
 import { cn } from "@/lib/utils";
@@ -17,13 +17,15 @@ const PRIMARY = [
 
 /** On desktop these sit with the rest; on mobile the tab bar holds five, so they live in the menu sheet. */
 export const SECONDARY = [
+  { href: "/runs", label: "Runs", icon: IconRun },
+  { href: "/insights", label: "Insights", icon: IconInsights },
   { href: "/atlas", label: "Atlas", icon: IconAtlas },
   { href: "/exercises", label: "Exercises", icon: IconExercises },
   { href: "/reflections", label: "Reflections", icon: IconReflection },
 ] as const;
 
 export function isActive(path: string, href: string) {
-  return href === "/" ? path === "/" : path === href || path.startsWith(`${href}/`) || (href === "/train" && path === "/workout");
+  return href === "/" ? path === "/" : path === href || path.startsWith(`${href}/`) || (href === "/train" && path === "/workout") || (href === "/runs" && path === "/run");
 }
 
 export function Sidebar({ name, email }: { name: string | null; email: string | null }) {
@@ -65,7 +67,7 @@ export function Sidebar({ name, email }: { name: string | null; email: string | 
 
 export function MobileTabs() {
   const path = usePathname();
-  if (path === "/workout" || path.startsWith("/landscape/explore")) return null;
+  if (path === "/workout" || path === "/run" || path.startsWith("/landscape/explore")) return null;
   return (
     <nav
       aria-label="Main"

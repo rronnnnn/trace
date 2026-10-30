@@ -152,7 +152,7 @@ export default async function ReflectionPage({ params }: PageProps<"/reflections
       </dl>
 
       {r.sessions.length ? (
-        <div className="mt-12 grid gap-12 md:grid-cols-2">
+        <div className="mt-12 grid grid-cols-[minmax(0,1fr)] gap-12 md:grid-cols-2">
           <section aria-labelledby="moved">
             <h2 id="moved" className="eyebrow">
               What moved
@@ -238,7 +238,7 @@ export default async function ReflectionPage({ params }: PageProps<"/reflections
         </section>
       ) : null}
 
-      <section aria-labelledby="yours" className="mt-14 grid gap-8 border-t border-ink/80 pt-8 md:grid-cols-[minmax(0,4fr)_minmax(0,7fr)] md:gap-12">
+      <section aria-labelledby="yours" className="mt-14 grid grid-cols-[minmax(0,1fr)] gap-8 border-t border-ink/80 pt-8 md:grid-cols-[minmax(0,4fr)_minmax(0,7fr)] md:gap-12">
         <div>
           <h2 id="yours" className="font-serif text-[28px] leading-[1.1]">
             Your reflection

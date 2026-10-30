@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { Sparkline } from "@/components/sparkline";
 import { formatShortDate, formatWeight, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -121,7 +122,7 @@ export function ExerciseIndex({ rows, unit, timeZone }: { rows: IndexRow[]; unit
           <h2 id="library" className="eyebrow">
             {trained.length ? "Not logged yet" : "Library"}
           </h2>
-          <ul className="mt-3 grid border-t border-line sm:grid-cols-2 sm:gap-x-10 lg:grid-cols-3">
+          <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] border-t border-line sm:grid-cols-2 sm:gap-x-10 lg:grid-cols-3">
             {untrained.map((r) => (
               <li key={r.id}>
                 <Link href={`/exercises/${r.id}`} className="flex items-baseline justify-between gap-3 border-b border-line py-2.5 hover:text-ink">
@@ -160,30 +161,5 @@ function Tag({ children }: { children: React.ReactNode }) {
     <span className="ml-2 rounded-sm bg-sunken px-1.5 py-0.5 align-middle text-[10px] font-medium uppercase tracking-wider text-ink-3">
       {children}
     </span>
-  );
-}
-
-/** Recent sessions' top values: a trend at a glance, latest point marked. */
-function Sparkline({ values, className, label }: { values: number[]; className?: string; label: string }) {
-  const w = 120;
-  const h = 28;
-  if (values.length < 2) return <span className={className} aria-hidden />;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const pts = values.map((v, i) => [2 + (i / (values.length - 1)) * (w - 6), h - 4 - ((v - min) / (max - min || 1)) * (h - 8)]);
-  const [lx, ly] = pts[pts.length - 1];
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className={className} role="img" aria-label={label}>
-      <polyline
-        points={pts.map((p) => p.join(",")).join(" ")}
-        fill="none"
-        stroke="var(--ink-3)"
-        strokeOpacity={0.55}
-        strokeWidth={1.5}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-      <circle cx={lx} cy={ly} r={3} fill="var(--sage)" stroke="var(--paper)" strokeWidth={1.5} />
-    </svg>
   );
 }

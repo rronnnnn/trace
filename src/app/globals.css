@@ -163,6 +163,13 @@
 }
 
 @layer base {
+  /* Nothing may widen the page sideways on a phone. `clip` (not `hidden`) keeps sticky
+     positioning working and doesn't make a scroll container. */
+  html,
+  body {
+    overflow-x: clip;
+  }
+
   html {
     background: var(--paper);
     color: var(--ink);

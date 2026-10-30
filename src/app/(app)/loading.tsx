@@ -5,7 +5,7 @@ export default function Loading() {
       <div className="h-3 w-32 animate-pulse rounded bg-sunken" />
       <div className="mt-4 h-10 w-72 max-w-full animate-pulse rounded bg-sunken" />
       <div className="mt-12 border-t border-line pt-8">
-        <div className="grid gap-10 md:grid-cols-[5fr_7fr]">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-10 md:grid-cols-[5fr_7fr]">
           <div className="space-y-3">
             {Array.from({ length: 5 }, (_, i) => (
               <div key={i} className="h-5 animate-pulse rounded bg-sunken/80" />

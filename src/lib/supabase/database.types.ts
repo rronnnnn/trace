@@ -185,6 +185,25 @@ export type Database = {
         "exercise_id" | "exercise_name",
         [FK<"goals_exercise_id_fkey", "exercise_id", "exercises">]
       >;
+      runs: Table<
+        {
+          id: string;
+          owner_id: string;
+          kind: "outdoor" | "treadmill";
+          source: "gps" | "manual";
+          title: string | null;
+          started_at: string;
+          ended_at: string;
+          elapsed_seconds: number;
+          moving_seconds: number;
+          distance_m: number;
+          elevation_gain_m: number | null;
+          route: Json | null;
+          is_sample: boolean;
+          created_at: string;
+        },
+        "kind" | "source" | "started_at" | "ended_at" | "elapsed_seconds" | "moving_seconds" | "distance_m"
+      >;
       weekly_reflections: Table<
         {
           id: string;

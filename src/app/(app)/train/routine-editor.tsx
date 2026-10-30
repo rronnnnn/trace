@@ -137,7 +137,7 @@ export function RoutineEditor({ uid, unit, initial }: { uid: string; unit: strin
         {draft.id ? "Edit routine" : "New routine"}
       </h1>
 
-      <section className="mt-8 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px]">
+      <section className="mt-8 grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px]">
         <div className="sm:col-span-3">
           <Label htmlFor="r-name">Name</Label>
           <Input id="r-name" value={draft.name} maxLength={80} placeholder="e.g. Upper A" onChange={(e) => patch({ name: e.target.value })} />

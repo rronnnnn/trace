@@ -12,7 +12,7 @@ import { ThemeSwitch } from "./theme-switch";
 export function MobileAccount({ name, email }: { name: string | null; email: string | null }) {
   const [open, setOpen] = useState(false);
   const path = usePathname();
-  if (path === "/workout" || path.startsWith("/landscape/explore")) return null;
+  if (path === "/workout" || path === "/run" || path.startsWith("/landscape/explore")) return null;
   const initial = (name ?? email ?? "?").trim().charAt(0).toUpperCase();
   return (
     <>
