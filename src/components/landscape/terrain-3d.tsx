@@ -1186,6 +1186,9 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         (Array.isArray(mat) ? mat : mat ? [mat] : []).forEach((x) => x.dispose());
       });
       renderer.dispose();
+      // release the GPU context now, not at garbage collection: the scene is rebuilt on every
+      // period or theme change, and leaked contexts get WebGL blocked for the site
+      renderer.forceContextLoss();
       renderer.domElement.remove();
       labelEl.replaceChildren();
       api.current = null;

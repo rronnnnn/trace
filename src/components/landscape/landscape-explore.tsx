@@ -66,13 +66,21 @@ function markSeen(uid: string, asOf: string) {
   } catch {}
 }
 
+// Probed once per page load: this is a useSyncExternalStore snapshot, read on every render, and
+// each probe would otherwise open a WebGL context. Browsers cap live contexts, and after enough
+// are lost Chrome blocks WebGL for the site, so the probe also releases its context straight away.
+let webglSupport: boolean | undefined;
 function hasWebGL() {
+  if (webglSupport !== undefined) return webglSupport;
   try {
     const c = document.createElement("canvas");
-    return Boolean(c.getContext("webgl2") || c.getContext("webgl"));
+    const gl = c.getContext("webgl2") ?? c.getContext("webgl");
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    webglSupport = Boolean(gl);
   } catch {
-    return false;
+    webglSupport = false;
   }
+  return webglSupport;
 }
 
 /**
