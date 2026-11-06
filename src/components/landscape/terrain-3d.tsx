@@ -1231,17 +1231,23 @@ export const Terrain3D = forwardRef<Terrain3DHandle, Props>(function Terrain3D(
         if (first) Object.assign(twoTravel, { a: twoTravel.a + dx, ay: twoTravel.ay + dy });
         else Object.assign(twoTravel, { b: twoTravel.b + dx, by: twoTravel.by + dy });
         const t = twoTravel;
-        const travelled = Math.max(t.a, t.b, Math.abs(t.ay), Math.abs(t.by), Math.abs(p1.dist - t.pinch));
-        if (travelled < 10) return;
+        const pinched = Math.abs(p1.dist - t.pinch);
+        const travelled = Math.max(t.a, t.b, Math.abs(t.ay), Math.abs(t.by), pinched);
+        if (travelled < 8) return;
+        // Moves arrive one finger at a time, so wait until both have reported before judging;
+        // deciding on the first finger alone almost always read a tilt as a pan.
+        const bothMoved = Math.abs(t.ay) + t.a >= 4 && Math.abs(t.by) + t.b >= 4;
+        const clearlyMap = pinched > Math.max(18, 0.12 * t.pinch) || travelled > 48;
+        if (!bothMoved && !clearlyMap) return;
         const tilt =
           camera === persp &&
-          Math.abs(t.ay) > 6 &&
-          Math.abs(t.by) > 6 &&
+          !clearlyMap &&
+          Math.abs(t.ay) >= 4 &&
+          Math.abs(t.by) >= 4 &&
           Math.sign(t.ay) === Math.sign(t.by) &&
-          Math.abs(t.ay) > 2 * t.a &&
-          Math.abs(t.by) > 2 * t.b &&
-          Math.abs(p1.dist - t.pinch) < 12 &&
-          Math.abs(p1.b.x - p1.a.x) > Math.abs(p1.b.y - p1.a.y);
+          Math.abs(t.ay) > 1.2 * t.a &&
+          Math.abs(t.by) > 1.2 * t.b &&
+          Math.abs(p1.b.x - p1.a.x) > 0.6 * Math.abs(p1.b.y - p1.a.y);
         twoMode = tilt ? "tilt" : "map";
       }
       if (twoMode === "tilt") {

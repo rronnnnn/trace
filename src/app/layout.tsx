@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { Suspense } from "react";
 import { Geist, Geist_Mono, Newsreader } from "next/font/google";
 import { Providers } from "@/components/providers";
+import { splashScript } from "@/lib/splash";
 import { themeBootScript } from "@/lib/theme";
 import "./globals.css";
 
@@ -13,9 +15,24 @@ const newsreader = Newsreader({
   weight: ["400", "500"],
 });
 
+/** iPhone screens in CSS px and pixel ratio, portrait. */
+const LAUNCH = [
+  [440, 956, 3], [402, 874, 3], [430, 932, 3], [393, 852, 3], [428, 926, 3], [390, 844, 3],
+  [414, 896, 3], [375, 812, 3], [414, 896, 2], [375, 667, 2], [320, 568, 2],
+] as const;
+
 export const metadata: Metadata = {
   title: { default: "TRACE", template: "%s · TRACE" },
   description: "A personal record of becoming stronger.",
+  appleWebApp: {
+    capable: true,
+    title: "TRACE",
+    // iOS shows these before any HTML arrives; plain splash background, so the animation picks up seamlessly
+    startupImage: LAUNCH.map(([w, h, r]) => ({
+      url: `/splash/${w * r}x${h * r}.png`,
+      media: `(device-width: ${w}px) and (device-height: ${h}px) and (-webkit-device-pixel-ratio: ${r}) and (orientation: portrait)`,
+    })),
+  },
 };
 
 export const viewport: Viewport = {
@@ -42,7 +59,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
       </head>
       <body className="min-h-full text-[15px] leading-normal">
-        <Providers>{children}</Providers>
+        <script dangerouslySetInnerHTML={{ __html: splashScript }} />
+        {/* lets the shell (and the splash) stream at once instead of waiting on the app's data */}
+        <Providers>
+          <Suspense>{children}</Suspense>
+        </Providers>
       </body>
     </html>
   );
