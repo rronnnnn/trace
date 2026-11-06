@@ -36,7 +36,8 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
 
   return (
     <main className="mx-auto w-full max-w-[880px] px-5 pb-20 pt-6 sm:px-8 md:pt-10">
-      <div className="flex items-center justify-between gap-4">
+      {/* pr-12 on mobile: the account button sits absolutely in the top-right corner */}
+      <div className="flex items-center justify-between gap-4 pr-12 md:pr-0">
         <Link href="/history" className="flex items-center gap-1.5 text-[13px] text-ink-3 hover:text-ink">
           <IconArrowLeft /> History
         </Link>
