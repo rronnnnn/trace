@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { IconArrowLeft } from "@/components/icons";
+import { buttonClass } from "@/components/ui/button";
 import { formatDuration, formatLongDate, formatVolume, formatWeight } from "@/lib/format";
 import { requireProfile } from "@/lib/supabase/server";
 import { getTimeZone } from "@/lib/timezone";
@@ -35,9 +36,14 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
 
   return (
     <main className="mx-auto w-full max-w-[880px] px-5 pb-20 pt-6 sm:px-8 md:pt-10">
-      <Link href="/history" className="flex items-center gap-1.5 text-[13px] text-ink-3 hover:text-ink">
-        <IconArrowLeft /> History
-      </Link>
+      <div className="flex items-center justify-between gap-4">
+        <Link href="/history" className="flex items-center gap-1.5 text-[13px] text-ink-3 hover:text-ink">
+          <IconArrowLeft /> History
+        </Link>
+        <Link href={`/history/${s.id}/edit`} className={buttonClass({ variant: "ghost", size: "sm" })}>
+          Edit
+        </Link>
+      </div>
 
       {sp.completed ? (
         <div role="status" className="mt-6 rounded-lg border border-sage-soft bg-sage-wash px-5 py-4 text-sm text-sage-deep">

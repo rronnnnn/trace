@@ -242,6 +242,8 @@ export type Database = {
       derive_session_records: { Args: { sid: string }; Returns: undefined };
       save_template: { Args: { payload: Json }; Returns: string };
       delete_exercise: { Args: { eid: string }; Returns: string };
+      edit_session: { Args: { payload: Json }; Returns: string };
+      delete_session: { Args: { sid: string }; Returns: undefined };
     };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };

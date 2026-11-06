@@ -465,6 +465,71 @@ d("database audit", () => {
     });
   });
 
+  describe("editing logged sessions", () => {
+    const loadSets = async (sid: string) =>
+      (
+        await B.from("session_sets")
+          .select("id, weight, reps, completed, session_exercise:session_exercises!inner(id, session_id)")
+          .eq("session_exercise.session_id", sid)
+          .order("position")
+      ).data!;
+
+    it("corrects a mistyped weight, then totals and records follow", async () => {
+      await wipeB();
+      const sid = uuid();
+      await B.rpc("complete_session", {
+        payload: payload({ id: sid, exercises: [{ exercise_id: squat, exercise_name: "Squat", sets: [{ weight: 2828, reps: 5, completed: true }, { weight: 100, reps: 5, completed: true }, { weight: 100, reps: null, completed: false }] }] }),
+      });
+      const sets = await loadSets(sid);
+      const seId = sets[0].session_exercise.id;
+
+      const { error } = await B.rpc("edit_session", {
+        payload: {
+          id: sid,
+          notes: "fixed",
+          sets: [
+            { id: sets[0].id, session_exercise_id: seId, weight: 120, reps: 5 },
+            { id: null, session_exercise_id: seId, weight: 110, reps: 3 },
+          ],
+          delete_sets: [sets[1].id],
+        },
+      });
+      expect(error).toBeNull();
+
+      const after = await loadSets(sid);
+      // the skipped planned set is left alone; the deleted one is gone; the new one is appended
+      expect(after.map((x) => [Number(x.weight), x.reps, x.completed])).toEqual([
+        [120, 5, true],
+        [100, null, false],
+        [110, 3, true],
+      ]);
+      const { data: s } = await B.from("workout_sessions").select("notes, total_volume, completed_sets").eq("id", sid).single();
+      expect(s).toMatchObject({ notes: "fixed", completed_sets: 2 });
+      expect(Number(s!.total_volume)).toBe(120 * 5 + 110 * 3);
+      const { data: pr } = await B.from("personal_records").select("value").eq("kind", "heaviest_weight").eq("exercise_id", squat);
+      expect(pr!.map((r) => Number(r.value))).toEqual([120]);
+    });
+
+    it("rejects sets without reps and other users' sessions", async () => {
+      const { data: s } = await B.from("workout_sessions").select("id").limit(1).single();
+      const sets = await loadSets(s!.id);
+      const zero = await B.rpc("edit_session", {
+        payload: { id: s!.id, sets: [{ id: sets[0].id, session_exercise_id: sets[0].session_exercise.id, weight: 1, reps: 0 }] },
+      });
+      expect(zero.error?.code).toBe("22023");
+      expect((await B.rpc("edit_session", { payload: { id: aSession, notes: "x" } })).error?.code).toBe("22023");
+      expect((await B.rpc("delete_session", { sid: aSession })).error?.code).toBe("22023");
+      expect((await A.from("workout_sessions").select("id").eq("id", aSession)).data).toHaveLength(1);
+    });
+
+    it("deleting a session removes it and rebuilds records without it", async () => {
+      const { data: s } = await B.from("workout_sessions").select("id").limit(1).single();
+      expect((await B.rpc("delete_session", { sid: s!.id })).error).toBeNull();
+      expect((await B.from("workout_sessions").select("id").eq("id", s!.id)).data).toHaveLength(0);
+      expect((await B.from("personal_records").select("id").eq("exercise_id", squat)).data).toHaveLength(0);
+    });
+  });
+
   describe("validation", () => {
     const bad = async (p: unknown) => (await B.rpc("complete_session", { payload: p as never })).error?.code;
     it("rejects malformed or impossible workouts", async () => {

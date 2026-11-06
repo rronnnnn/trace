@@ -24,7 +24,7 @@ const key = () => crypto.randomUUID();
 const select =
   "h-9 rounded-md border border-line-strong bg-surface px-2 text-[14px] text-ink focus:border-ink-2 focus:outline-none";
 
-function IconBtn({ label, onClick, disabled, children, danger }: { label: string; onClick: () => void; disabled?: boolean; children: React.ReactNode; danger?: boolean }) {
+export function IconBtn({ label, onClick, disabled, children, danger }: { label: string; onClick: () => void; disabled?: boolean; children: React.ReactNode; danger?: boolean }) {
   return (
     <button
       type="button"
@@ -47,7 +47,7 @@ const Chevron = ({ up }: { up?: boolean }) => (
     <path d={up ? "M3 8.5 7 4.5l4 4" : "M3 5.5l4 4 4-4"} />
   </svg>
 );
-const Cross = () => (
+export const Cross = () => (
   <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
     <path d="M2 2l10 10M12 2L2 12" />
   </svg>
